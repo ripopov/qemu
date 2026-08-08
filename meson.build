@@ -4393,6 +4393,29 @@ foreach target : target_dirs
                  c_args: c_args,
                  build_by_default: false)
 
+  # This branch supplies QEMU's RISC-V TCG engine as the execution backend
+  # for gem5's JitCPU. Build the backend by default whenever riscv64-softmmu
+  # is configured; the adapter and its public ABI live in this QEMU tree.
+  if target == 'riscv64-softmmu'
+    gem5_jit_lib = shared_library(
+      'gem5-qemu-jit', files('contrib/gem5-jit/qemu-jit.c'),
+      name_prefix: 'lib',
+      install: false,
+      build_by_default: true,
+      c_args: c_args,
+      dependencies: arch_deps + [target_stubs],
+      objects: lib.extract_all_objects(recursive: true),
+      link_depends: [block_syms, qemu_syms],
+      link_args: link_args)
+    gem5_jit_smoke = executable(
+      'gem5-qemu-jit-smoke', files('contrib/gem5-jit/qemu-jit-smoke.c'),
+      link_with: gem5_jit_lib,
+      install: false,
+      build_by_default: false)
+    test('gem5-qemu-jit-smoke', gem5_jit_smoke,
+         suite: ['unit', 'gem5-jit'])
+  endif
+
   if target.endswith('-softmmu')
     execs = [{
       'name': 'qemu-system-' + target_name,

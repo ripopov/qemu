@@ -925,6 +925,10 @@ static inline uint32_t vext_get_vlmax(uint32_t vlenb, uint32_t vsew,
 
 bool riscv_cpu_is_32bit(RISCVCPU *cpu);
 
+/* Enabled only by the embedded gem5 JitCPU adapter. Standard QEMU treats
+ * gem5 pseudo-instruction encodings as ordinary unsupported custom opcodes. */
+extern bool riscv_gem5_jit_enabled;
+
 bool riscv_cpu_virt_mem_enabled(CPURISCVState *env, bool is_vm_ldst);
 RISCVPmPmm riscv_pm_get_pmm(CPURISCVState *env);
 RISCVPmPmm riscv_pm_get_vm_ldst_pmm(CPURISCVState *env);
