@@ -110,6 +110,18 @@ VS/VU in profile mode), checks successful SC without interference, and checks
 failed SC after explicit invalidation or a different-value store by the other
 hart. This does not qualify all reservation-granule or eventual-progress rules.
 
+The version-1 `gem5_qemu_jit_set_wrs_exit_mode` API enables host-owned WRS
+handling per stopped hart. It is opt-in so existing callers retain QEMU's
+immediate-return policy. Enabled NTO/STO instructions produce distinct run
+exit reasons, retire exactly once, leave PC at the successor, and preserve
+the reservation token. QEMU still applies its NTO privilege interception
+before exiting; the host must decide whether to wait, own the STO timer and
+wakeups, and prevent further guest execution while waiting. This setting is
+host policy, not a guest CSR or migrated wait state. The two-hart smoke checks
+both instructions with live/empty reservations, one-instruction and larger
+budgets, malformed mode requests, subsequent SC and opting back out. The ABI
+does not by itself implement gem5 waiting or cross-model monitor transfer.
+
 The version-2 reservation snapshot API exports/imports a stopped RV64 hart's
 virtual address, expected value, physical LR address, and access width (4/8).
 Version 1 is rejected because it lacks physical monitor identity. Import validates all

@@ -318,6 +318,12 @@ jit_run_on_vcpu(CPUState *cpu, run_on_cpu_data data)
         (hart->riscv_cpu->env.bins & 0x01ffffff) == 0x7b) {
         request->result.reason = GEM5_QEMU_JIT_EXIT_M5OP;
         request->result.m5_function = hart->riscv_cpu->env.bins >> 25;
+    } else if (request->result.qemu_exception == EXCP_HLT && !cpu->halted &&
+               hart->riscv_cpu->env.jit_wrs_exit &&
+               (hart->riscv_cpu->env.bins == 0x00d00073 ||
+                hart->riscv_cpu->env.bins == 0x01d00073)) {
+        request->result.reason = hart->riscv_cpu->env.bins == 0x00d00073 ?
+            GEM5_QEMU_JIT_EXIT_WRS_NTO : GEM5_QEMU_JIT_EXIT_WRS_STO;
     } else if (request->result.instructions == budget) {
         request->result.reason = GEM5_QEMU_JIT_EXIT_BUDGET;
     } else if (cpu->halted) {
@@ -515,6 +521,19 @@ gem5_qemu_jit_init_config(const Gem5QemuJitCallbacks *callbacks,
     hart->callbacks = *callbacks;
     hart->riscv_cpu->env.mhartid = callbacks->hart_id;
     hart->initialized = true;
+    return 0;
+}
+
+int
+gem5_qemu_jit_set_wrs_exit_mode(uint32_t instance_id, uint32_t version,
+                               uint32_t enabled)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    if (!hart || hart->running || version != GEM5_QEMU_JIT_WRS_EXIT_VERSION ||
+        enabled > 1 || !hart->riscv_cpu->cfg.ext_zawrs) {
+        return -1;
+    }
+    hart->riscv_cpu->env.jit_wrs_exit = enabled;
     return 0;
 }
 

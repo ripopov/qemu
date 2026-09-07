@@ -1017,6 +1017,70 @@ reservation_smoke(int profile_test)
     return 0;
 }
 
+static int wrs_exit_smoke(void)
+{
+    unsigned hart, short_wait, valid, large_budget;
+    for (hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_set_wrs_exit_mode(hart, 1, 1) ||
+            !gem5_qemu_jit_set_wrs_exit_mode(hart, 2, 0) ||
+            !gem5_qemu_jit_set_wrs_exit_mode(hart, 1, 2)) {
+            return -1;
+        }
+        for (short_wait = 0; short_wait < 2; short_wait++) {
+            const uint32_t program[] = {
+                0x1003b2af, /* lr.d x5,(x7) */
+                short_wait ? 0x01d00073 : 0x00d00073,
+                0x1883b32f, /* sc.d x6,x8,(x7) */
+            };
+            memcpy(memory + 128, program, sizeof(program));
+            for (valid = 0; valid < 2; valid++) {
+                for (large_budget = 0; large_budget < 2; large_budget++) {
+                    Gem5QemuJitRunResult result;
+                    Gem5QemuJitReservationState before, after;
+                    memset(memory + 768, 0, 8);
+                    memory[768] = 17;
+                    gem5_qemu_jit_set_gpr(hart, 7, 768);
+                    gem5_qemu_jit_set_gpr(hart, 8, 42);
+                    gem5_qemu_jit_set_pc(hart, valid ? 128 : 132);
+                    gem5_qemu_jit_invalidate_translations(hart);
+                    if ((valid && gem5_qemu_jit_run(hart, 1, &result)) ||
+                        gem5_qemu_jit_get_reservation_state(hart, &before, sizeof(before)) ||
+                        before.valid != valid ||
+                        gem5_qemu_jit_run(hart, large_budget ? 16 : 1, &result) ||
+                        result.reason != (short_wait ? GEM5_QEMU_JIT_EXIT_WRS_STO :
+                                                        GEM5_QEMU_JIT_EXIT_WRS_NTO) ||
+                        result.instructions != 1 || gem5_qemu_jit_get_pc(hart) != 136 ||
+                        gem5_qemu_jit_get_reservation_state(hart, &after, sizeof(after)) ||
+                        memcmp(&before, &after, sizeof(before)) ||
+                        gem5_qemu_jit_run(hart, 1, &result) ||
+                        result.reason != GEM5_QEMU_JIT_EXIT_BUDGET ||
+                        gem5_qemu_jit_get_pc(hart) != 140 ||
+                        (gem5_qemu_jit_get_gpr(hart, 6) == 0) != (valid != 0)) {
+                        fprintf(stderr, "WRS exit failed: hart=%u sto=%u valid=%u budget=%u\n",
+                                hart, short_wait, valid, large_budget);
+                        return -1;
+                    }
+                }
+            }
+        }
+        if (gem5_qemu_jit_set_wrs_exit_mode(hart, 1, 0)) {
+            return -1;
+        }
+        /* Opting out restores the original immediate-return behavior. */
+        {
+            Gem5QemuJitRunResult result;
+            gem5_qemu_jit_set_pc(hart, 132);
+            if (gem5_qemu_jit_run(hart, 1, &result) ||
+                result.reason != GEM5_QEMU_JIT_EXIT_BUDGET ||
+                gem5_qemu_jit_get_pc(hart) != 136) {
+                return -1;
+            }
+        }
+    }
+    puts("WRS host exits: NTO/STO, live/empty monitors, exact budgets and opt-out passed");
+    return 0;
+}
+
 static int external_write_smoke(void)
 {
     Gem5QemuJitReservationState saved[2], observed;
@@ -1349,6 +1413,9 @@ main(int argc, char **argv)
         return 1;
     }
     if (reservation_smoke(profile_test) || external_write_smoke()) {
+        return 1;
+    }
+    if (profile_test && wrs_exit_smoke()) {
         return 1;
     }
     if (profile_test && timer_smoke()) {

@@ -22,6 +22,13 @@ static bool trans_wrs_sto(DisasContext *ctx, arg_wrs_sto *a)
         return false;
     }
 
+#ifndef CONFIG_USER_ONLY
+    if (riscv_gem5_jit_enabled) {
+        gen_helper_jit_wrs(tcg_env, tcg_constant_i32(ctx->opcode),
+                          tcg_constant_tl(ctx->base.pc_next + ctx->cur_insn_len));
+    }
+#endif
+
     /*
      * The specification says:
      * While stalled, an implementation is permitted to occasionally

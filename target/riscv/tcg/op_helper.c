@@ -672,6 +672,17 @@ void helper_wrs_nto(CPURISCVState *env)
     }
 }
 
+void helper_jit_wrs(CPURISCVState *env, uint32_t opcode, target_ulong next_pc)
+{
+    if (env->jit_wrs_exit) {
+        CPUState *cs = env_cpu(env);
+        env->pc = next_pc;
+        env->bins = opcode;
+        cs->exception_index = EXCP_HLT;
+        cpu_loop_exit(cs);
+    }
+}
+
 void helper_tlb_flush(CPURISCVState *env)
 {
     CPUState *cs = env_cpu(env);

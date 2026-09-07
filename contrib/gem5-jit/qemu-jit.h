@@ -85,7 +85,18 @@ enum Gem5QemuJitExitReason {
     GEM5_QEMU_JIT_EXIT_EXCEPTION = 3,
     GEM5_QEMU_JIT_EXIT_ERROR = 4,
     GEM5_QEMU_JIT_EXIT_M5OP = 5,
+    GEM5_QEMU_JIT_EXIT_WRS_NTO = 6,
+    GEM5_QEMU_JIT_EXIT_WRS_STO = 7,
 };
+
+#define GEM5_QEMU_JIT_WRS_EXIT_VERSION 1
+/* Opt in, per stopped hart, to WRS execution boundaries. The instruction
+ * retires and PC points to its successor; the reservation is not cleared.
+ * The host owns waiting, wakeups and the STO timer. Without opt-in, existing
+ * immediate-return WRS behavior remains unchanged. This is host policy,
+ * not guest architectural state; reapply when constructing a restored hart. */
+GEM5_QEMU_JIT_API int gem5_qemu_jit_set_wrs_exit_mode(
+    uint32_t instance_id, uint32_t version, uint32_t enabled);
 
 typedef struct Gem5QemuJitRunResult {
     uint64_t instructions;
