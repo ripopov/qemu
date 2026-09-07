@@ -114,6 +114,57 @@ hpm_transfer_smoke(void)
 }
 
 static int
+fixed_counter_transfer_smoke(void)
+{
+    Gem5QemuJitFixedCounterState saved[2], state[2], observed, bad;
+    Gem5QemuJitHpmState hpm[2], hpm_after;
+    uint64_t pending[2];
+    for (unsigned hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_set_mode(hart, 3, 0) ||
+            gem5_qemu_jit_get_fixed_counters(hart, &saved[hart], sizeof(saved[hart])) ||
+            gem5_qemu_jit_get_hpm_state(hart, &hpm[hart], sizeof(hpm[hart]))) {
+            return -1;
+        }
+        pending[hart] = gem5_qemu_jit_get_mip(hart);
+        state[hart] = saved[hart];
+        state[hart].inhibited = 5;
+        state[hart].cycle = UINT64_C(0x1234567800000000) + hart;
+        state[hart].instret = UINT64_C(0x2345678900000000) + hart;
+        if (gem5_qemu_jit_set_fixed_counters(hart, &state[hart], sizeof(state[hart]))) {
+            return -1;
+        }
+    }
+    for (unsigned hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_get_fixed_counters(hart, &observed, sizeof(observed)) ||
+            memcmp(&observed, &state[hart], sizeof(observed))) {
+            return -1;
+        }
+        for (unsigned trial = 0; trial < 4; trial++) {
+            bad = state[hart];
+            switch (trial) {
+            case 0: bad.version++; break;
+            case 1: bad.size--; break;
+            case 2: bad.inhibited |= 2; break;
+            case 3: bad.reserved = 1; break;
+            }
+            if (!gem5_qemu_jit_set_fixed_counters(hart, &bad, sizeof(bad)) ||
+                gem5_qemu_jit_get_fixed_counters(hart, &observed, sizeof(observed)) ||
+                memcmp(&observed, &state[hart], sizeof(observed))) {
+                return -1;
+            }
+        }
+        if (gem5_qemu_jit_get_hpm_state(hart, &hpm_after, sizeof(hpm_after)) ||
+            memcmp(&hpm[hart], &hpm_after, sizeof(hpm_after)) ||
+            gem5_qemu_jit_get_mip(hart) != pending[hart] ||
+            gem5_qemu_jit_set_fixed_counters(hart, &saved[hart], sizeof(saved[hart]))) {
+            return -1;
+        }
+    }
+    puts("Fixed counters: two-hart frozen samples and rejection atomicity passed");
+    return 0;
+}
+
+static int
 counter_restore_smoke(void)
 {
     for (unsigned hart = 0; hart < 2; hart++) {
@@ -935,6 +986,10 @@ main(int argc, char **argv)
 
     if (profile_test && hpm_transfer_smoke()) {
         fprintf(stderr, "HPM bank migration failed\n");
+        return 1;
+    }
+    if (profile_test && fixed_counter_transfer_smoke()) {
+        fprintf(stderr, "fixed-counter migration failed\n");
         return 1;
     }
     if (counter_restore_smoke()) {

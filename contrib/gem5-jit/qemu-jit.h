@@ -183,6 +183,23 @@ GEM5_QEMU_JIT_API int gem5_qemu_jit_set_csr(
 #define GEM5_QEMU_JIT_MSTATUS_RESTORE_VERSION 1
 #define GEM5_QEMU_JIT_STATEEN_VERSION 1
 #define GEM5_QEMU_JIT_HPM_STATE_VERSION 1
+#define GEM5_QEMU_JIT_FIXED_COUNTER_STATE_VERSION 1
+typedef struct Gem5QemuJitFixedCounterState {
+    uint32_t version;
+    uint32_t size;
+    uint32_t inhibited; /* MCOUNTINHIBIT.CY/IR only */
+    uint32_t reserved;
+    uint64_t cycle;
+    uint64_t instret;
+    uint64_t cyclecfg;
+    uint64_t instretcfg;
+} Gem5QemuJitFixedCounterState;
+/* Samples and optional filter controls, never backend source offsets.
+ * Restore requires a stopped RV64 M-mode hart and retires no instruction. */
+GEM5_QEMU_JIT_API int gem5_qemu_jit_get_fixed_counters(
+    uint32_t instance_id, Gem5QemuJitFixedCounterState *state, size_t size);
+GEM5_QEMU_JIT_API int gem5_qemu_jit_set_fixed_counters(
+    uint32_t instance_id, const Gem5QemuJitFixedCounterState *state, size_t size);
 /* Programmable HPM bank only; fixed cycle/instret, their inhibition bits,
  * counter-access gates and interrupt pending state are owned separately.
  * Values are counter samples, not QEMU source offsets or timer objects.

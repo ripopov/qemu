@@ -17,6 +17,14 @@ counter continuity are not yet qualified. Duplicate nonzero event selectors
 are rejected because the current QEMU event map selects only one counter per
 event; supporting multiple counters per event remains required work.
 
+The separate version-1 fixed-counter snapshot carries cycle/instret samples,
+CY/IR inhibition and optional filter controls. Its trusted setter rebases
+sources without executing guest writes and leaves HPM/interrupt state alone.
+Two-hart frozen round trips and rejection atomicity are covered by the profile
+smoke. The gem5 integration restores fixed samples at startup/takeover and
+imports samples after batch retirement accounting; active continuity needs
+the corresponding gem5 checkpoint and handoff tests, not just this smoke.
+
 The adapter supports multiple gem5 JitCPU objects in one process. The first
 adapter initialization fixes the instance count and creates one QEMU RISC-V
 vCPU per instance. Each vCPU receives a unique instance ID, gem5 hart ID, and

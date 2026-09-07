@@ -830,6 +830,70 @@ gem5_qemu_jit_restore_mstatus(uint32_t instance_id, unsigned version,
 }
 
 int
+gem5_qemu_jit_get_fixed_counters(uint32_t instance_id,
+                               Gem5QemuJitFixedCounterState *state, size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    if (!hart || hart->running || !state || size != sizeof(*state) ||
+        riscv_cpu_mxl(&hart->riscv_cpu->env) != MXL_RV64) {
+        return -1;
+    }
+    CPURISCVState *env = &hart->riscv_cpu->env;
+    memset(state, 0, sizeof(*state));
+    state->version = GEM5_QEMU_JIT_FIXED_COUNTER_STATE_VERSION;
+    state->size = sizeof(*state);
+    state->inhibited = env->mcountinhibit & 5;
+    state->cyclecfg = env->mcyclecfg;
+    state->instretcfg = env->minstretcfg;
+    riscv_pmu_read_ctr(env, &state->cycle, false, 0);
+    riscv_pmu_read_ctr(env, &state->instret, false, 2);
+    if (!(state->inhibited & 4) && icount_enabled() &&
+        env->pmu_ctrs[2].mhpmcounter_prev ==
+            riscv_pmu_ctr_get_fixed_counters_val(env, 2) + 1) {
+        state->instret = env->pmu_ctrs[2].mhpmcounter_val;
+    }
+    return 0;
+}
+
+int
+gem5_qemu_jit_set_fixed_counters(uint32_t instance_id,
+                               const Gem5QemuJitFixedCounterState *state,
+                               size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    if (!hart || hart->running || !state || size != sizeof(*state) ||
+        state->version != GEM5_QEMU_JIT_FIXED_COUNTER_STATE_VERSION ||
+        state->size != sizeof(*state) || state->reserved ||
+        (state->inhibited & ~UINT32_C(5))) {
+        return -1;
+    }
+    RISCVCPU *cpu = hart->riscv_cpu;
+    CPURISCVState *env = &cpu->env;
+    if (riscv_cpu_mxl(env) != MXL_RV64 || env->priv != PRV_M ||
+        env->virt_enabled || (!cpu->cfg.ext_smcntrpmf &&
+                             (state->cyclecfg || state->instretcfg))) {
+        return -1;
+    }
+    uint64_t mask = ~MHPMEVENT_FILTER_MASK | MHPMEVENT_BIT_MINH;
+    mask |= riscv_has_ext(env, RVU) ? MHPMEVENT_BIT_UINH : 0;
+    mask |= riscv_has_ext(env, RVS) ? MHPMEVENT_BIT_SINH : 0;
+    mask |= riscv_has_ext(env, RVH) ? MHPMEVENT_BIT_VSINH : 0;
+    mask |= riscv_has_ext(env, RVH) && riscv_has_ext(env, RVU) ?
+        MHPMEVENT_BIT_VUINH : 0;
+    if ((state->cyclecfg | state->instretcfg) & ~mask) {
+        return -1;
+    }
+    env->mcyclecfg = state->cyclecfg;
+    env->minstretcfg = state->instretcfg;
+    env->mcountinhibit = (env->mcountinhibit & ~UINT32_C(5)) | state->inhibited;
+    env->pmu_ctrs[0].mhpmcounter_val = state->cycle;
+    env->pmu_ctrs[0].mhpmcounter_prev = riscv_pmu_ctr_get_fixed_counters_val(env, 0);
+    env->pmu_ctrs[2].mhpmcounter_val = state->instret;
+    env->pmu_ctrs[2].mhpmcounter_prev = riscv_pmu_ctr_get_fixed_counters_val(env, 2);
+    return 0;
+}
+
+int
 gem5_qemu_jit_get_hpm_state(uint32_t instance_id,
                           Gem5QemuJitHpmState *state, size_t size)
 {
