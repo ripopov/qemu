@@ -1409,12 +1409,43 @@ static RISCVException riscv_pmu_write_ctrh(CPURISCVState *env, target_ulong val,
     return RISCV_EXCP_NONE;
 }
 
+static void pmu_skip_counter_write_inst(CPURISCVState *env, unsigned idx,
+                                       uintptr_t ra)
+{
+    uint64_t cfg, inhibit;
+
+    /* A guest counter write takes effect after its own retirement. icount
+     * has not charged that instruction yet, so exclude it from the delta
+     * added to the newly written value. Host restoration (ra == 0) retires
+     * no instruction and must not receive this compensation.
+     */
+    if (!ra || !icount_enabled() || (env->mcountinhibit & BIT(idx)) ||
+        !riscv_pmu_ctr_monitor_instructions(env, idx)) {
+        return;
+    }
+    cfg = idx == 2 ? env->minstretcfg : env->mhpmevent_val[idx];
+    if (env->priv == PRV_M) {
+        inhibit = MHPMEVENT_BIT_MINH;
+    } else if (env->priv == PRV_S) {
+        inhibit = env->virt_enabled ? MHPMEVENT_BIT_VSINH : MHPMEVENT_BIT_SINH;
+    } else {
+        inhibit = env->virt_enabled ? MHPMEVENT_BIT_VUINH : MHPMEVENT_BIT_UINH;
+    }
+    if (!(cfg & inhibit)) {
+        env->pmu_ctrs[idx].mhpmcounter_prev++;
+    }
+}
+
 static RISCVException write_mhpmcounter(CPURISCVState *env, int csrno,
                                         target_ulong val, uintptr_t ra)
 {
     int ctr_idx = csrno - CSR_MCYCLE;
 
-    return riscv_pmu_write_ctr(env, val, ctr_idx);
+    RISCVException ret = riscv_pmu_write_ctr(env, val, ctr_idx);
+    if (ret == RISCV_EXCP_NONE) {
+        pmu_skip_counter_write_inst(env, ctr_idx, ra);
+    }
+    return ret;
 }
 
 static RISCVException write_mhpmcounterh(CPURISCVState *env, int csrno,
@@ -1422,7 +1453,11 @@ static RISCVException write_mhpmcounterh(CPURISCVState *env, int csrno,
 {
     int ctr_idx = csrno - CSR_MCYCLEH;
 
-    return riscv_pmu_write_ctrh(env, val, ctr_idx);
+    RISCVException ret = riscv_pmu_write_ctrh(env, val, ctr_idx);
+    if (ret == RISCV_EXCP_NONE) {
+        pmu_skip_counter_write_inst(env, ctr_idx, ra);
+    }
+    return ret;
 }
 
 RISCVException riscv_pmu_read_ctr(CPURISCVState *env, target_ulong *val,

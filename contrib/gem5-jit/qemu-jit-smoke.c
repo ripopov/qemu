@@ -54,6 +54,26 @@ memory_map(void *opaque, size_t index, uint64_t *guest_address, uint64_t *size,
 }
 
 static int
+counter_restore_smoke(void)
+{
+    for (unsigned hart = 0; hart < 2; hart++) {
+        uint64_t inhibit, saved, observed;
+        uint64_t value = UINT64_C(0x1234567800000000) + hart;
+        if (gem5_qemu_jit_set_mode(hart, 3, 0) ||
+            gem5_qemu_jit_get_csr(hart, 0x320, &inhibit) ||
+            gem5_qemu_jit_get_csr(hart, 0xb02, &saved) ||
+            gem5_qemu_jit_set_csr(hart, 0x320, inhibit & ~UINT64_C(4)) ||
+            gem5_qemu_jit_set_csr(hart, 0xb02, value) ||
+            gem5_qemu_jit_get_csr(hart, 0xb02, &observed) || observed != value ||
+            gem5_qemu_jit_set_csr(hart, 0xb02, saved) ||
+            gem5_qemu_jit_set_csr(hart, 0x320, inhibit)) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int
 mstatus_restore_smoke(void)
 {
     const uint64_t mask = UINT64_C(3) << 38; /* GVA, MPV */
@@ -853,6 +873,10 @@ main(int argc, char **argv)
         }
     }
 
+    if (counter_restore_smoke()) {
+        fprintf(stderr, "host counter restoration failed\n");
+        return 1;
+    }
     if (profile_test && mstatus_restore_smoke()) {
         fprintf(stderr, "machine status restoration failed\n");
         return 1;
