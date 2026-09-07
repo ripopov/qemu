@@ -591,12 +591,20 @@ gem5_qemu_jit_set_mode(uint32_t instance_id, unsigned privilege,
     if (virtualization && !riscv_has_ext(env, RVH)) {
         return -1;
     }
+    /* Host-side state access is not an architectural privilege transition.
+     * QEMU's mode helper clears LR state even for an unchanged mode. Preserve
+     * it across batch synchronization; explicit takeover invalidation still
+     * clears it, and guest xRET/trap helpers retain their normal behavior. */
+    uint64_t load_res = env->load_res;
+    uint64_t load_val = env->load_val;
     /* Like QEMU's debugger restore path, move banked registers before
      * changing V. set_mode alone changes execution flags, not the banks. */
     if (env->virt_enabled != virtualization) {
         riscv_cpu_swap_hypervisor_regs(env);
     }
     riscv_cpu_set_mode(env, privilege, virtualization);
+    env->load_res = load_res;
+    env->load_val = load_val;
     return 0;
 }
 

@@ -364,6 +364,73 @@ timer_smoke(void)
     return 0;
 }
 
+static int
+reservation_smoke(int profile_test)
+{
+    /* lr.d x5,(x7); sc.d x6,x8,(x7) */
+    const uint32_t program[] = {0x1003b2af, 0x1883b32f};
+    const uint32_t interfering_store = 0x0083b023; /* sd x8,0(x7) */
+    Gem5QemuJitRunResult result;
+    unsigned hart, invalidate;
+    memcpy(memory + 128, program, sizeof(program));
+    memcpy(memory + 192, &interfering_store, sizeof(interfering_store));
+    for (hart = 0; hart < 2; hart++) {
+        for (invalidate = 0; invalidate < 3; invalidate++) {
+            memset(memory + 768, 0, 8);
+            memory[768] = 17;
+            if (gem5_qemu_jit_set_gpr(hart, 7, 768) ||
+                gem5_qemu_jit_set_gpr(hart, 8, 42)) {
+                return -1;
+            }
+            gem5_qemu_jit_set_pc(hart, 128);
+            gem5_qemu_jit_invalidate_translations(hart);
+            if (gem5_qemu_jit_run(hart, 1, &result) ||
+                result.reason != GEM5_QEMU_JIT_EXIT_BUDGET ||
+                gem5_qemu_jit_get_gpr(hart, 5) != 17 ||
+                gem5_qemu_jit_get_pc(hart) != 132 ||
+                gem5_qemu_jit_set_priv(hart, 3) ||
+                gem5_qemu_jit_set_mode(hart, 1, 0) ||
+                gem5_qemu_jit_set_mode(hart, 3, 0)) {
+                return -1;
+            }
+            if (profile_test &&
+                (gem5_qemu_jit_set_mode(hart, 1, 1) ||
+                 gem5_qemu_jit_set_mode(hart, 0, 1) ||
+                 gem5_qemu_jit_set_mode(hart, 3, 0))) {
+                return -1;
+            }
+            if (invalidate == 1) {
+                gem5_qemu_jit_invalidate_translations(hart);
+            } else if (invalidate == 2) {
+                unsigned other = hart ^ 1;
+                if (gem5_qemu_jit_set_gpr(other, 7, 768) ||
+                    gem5_qemu_jit_set_gpr(other, 8, 99)) {
+                    return -1;
+                }
+                gem5_qemu_jit_set_pc(other, 192);
+                gem5_qemu_jit_invalidate_translations(other);
+                if (gem5_qemu_jit_run(other, 1, &result) ||
+                    result.reason != GEM5_QEMU_JIT_EXIT_BUDGET ||
+                    memory[768] != 99) {
+                    return -1;
+                }
+            }
+            if (gem5_qemu_jit_run(hart, 1, &result) ||
+                result.reason != GEM5_QEMU_JIT_EXIT_BUDGET ||
+                gem5_qemu_jit_get_pc(hart) != 136 ||
+                (gem5_qemu_jit_get_gpr(hart, 6) == 0) != !invalidate ||
+                memory[768] != (invalidate == 2 ? 99 : invalidate ? 17 : 42)) {
+                fprintf(stderr, "reservation hart %u invalidate=%u sc=%llu\n",
+                        hart, invalidate,
+                        (unsigned long long)gem5_qemu_jit_get_gpr(hart, 6));
+                return -1;
+            }
+        }
+    }
+    puts("LR/SC: batch/mode preservation, invalidation and interference passed");
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -595,6 +662,9 @@ main(int argc, char **argv)
         }
     }
 
+    if (reservation_smoke(profile_test)) {
+        return 1;
+    }
     if (profile_test && timer_smoke()) {
         fprintf(stderr, "host timer smoke failed\n");
         return 1;

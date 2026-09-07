@@ -57,6 +57,13 @@ are rejected before state changes. Legacy `set_priv` selects V=0 through
 this same path. The profile smoke tests S/VS status, trap vector, scratch,
 EPC, cause, trap value and SATP banks, guest updates across VS/VU transitions,
 and legacy M-mode borrowing; invalid requests must preserve the active mode.
+Host mode setters preserve LR address/value state: borrowing privilege for
+CSR synchronization is not a guest trap or xRET. Explicit translation
+invalidation at takeover still clears the reservation. The two-hart smoke
+splits LR and SC across execution calls and host mode changes (including
+VS/VU in profile mode), checks successful SC without interference, and checks
+failed SC after explicit invalidation or a different-value store by the other
+hart. This does not qualify all reservation-granule or eventual-progress rules.
 
 Embedded S/VS timers use an external-timer hook instead of QEMU's ACLINT
 timebase cast and native timer queue. `gem5_qemu_jit_refresh_timers` samples

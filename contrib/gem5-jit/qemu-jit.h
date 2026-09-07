@@ -151,7 +151,9 @@ GEM5_QEMU_JIT_API unsigned gem5_qemu_jit_get_priv(uint32_t instance_id);
 GEM5_QEMU_JIT_API int gem5_qemu_jit_set_priv(
     uint32_t instance_id, unsigned value);
 /* Migration mode changes bank HS/VS state when V changes. Not an xRET:
- * no trap-stack status updates. Legacy set_priv selects V=0. */
+ * no trap-stack status updates, and LR state is preserved for host-side
+ * synchronization. Use explicit invalidation at takeover. Legacy set_priv
+ * selects V=0. */
 GEM5_QEMU_JIT_API int gem5_qemu_jit_get_mode(
     uint32_t instance_id, unsigned *privilege, unsigned *virtualization);
 GEM5_QEMU_JIT_API int gem5_qemu_jit_set_mode(
