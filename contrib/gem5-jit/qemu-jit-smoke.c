@@ -281,6 +281,38 @@ counter_restore_smoke(void)
 }
 
 static int
+translation_modes_smoke(void)
+{
+    const unsigned csrs[] = {0x180, 0x280, 0x680};
+    const unsigned modes[] = {0, 8, 9, 10};
+
+    for (unsigned hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_set_mode(hart, 3, 0)) {
+            return -1;
+        }
+        for (unsigned i = 0; i < 3; i++) {
+            uint64_t saved, observed;
+            if (gem5_qemu_jit_get_csr(hart, csrs[i], &saved)) {
+                return -1;
+            }
+            for (unsigned m = 0; m < 4; m++) {
+                uint64_t value = (uint64_t)modes[m] << 60;
+                if (gem5_qemu_jit_set_csr(hart, csrs[i], value) ||
+                    gem5_qemu_jit_get_csr(hart, csrs[i], &observed) ||
+                    observed != value) {
+                    return -1;
+                }
+            }
+            if (gem5_qemu_jit_set_csr(hart, csrs[i], saved)) {
+                return -1;
+            }
+        }
+    }
+    puts("two-hart SATP/VSATP/HGATP Bare/Sv39/Sv48/Sv57 modes passed");
+    return 0;
+}
+
+static int
 user_xlen_smoke(bool profile)
 {
     const unsigned csrs[] = {0x300, 0x100, 0x200};
@@ -1341,6 +1373,10 @@ main(int argc, char **argv)
     }
     if (counter_restore_smoke()) {
         fprintf(stderr, "host counter restoration failed\n");
+        return 1;
+    }
+    if (profile_test && translation_modes_smoke()) {
+        fprintf(stderr, "embedded translation modes failed\n");
         return 1;
     }
     if (user_xlen_smoke(profile_test)) {

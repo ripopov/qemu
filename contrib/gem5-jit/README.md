@@ -5,6 +5,12 @@ test used by gem5's `RiscvJitCPU`. Together with the RISC-V translation hook
 and Meson target in the `gem5-jit` branch, it turns QEMU's RISC-V TCG engine
 into a dynamically loaded execution backend.
 
+The embedded RVA23S64 configuration enables optional Sv48/Sv57 in addition
+to mandatory Sv39, matching gem5's exposed translation modes. This is set
+before realization on every hart; standalone QEMU profile defaults are
+unchanged. The profile smoke checks Bare/Sv39/Sv48/Sv57 readback in SATP,
+VSATP and HGATP on both harts. Page-table walks require integration tests.
+
 The version-1 programmable HPM snapshot API transfers the implemented bank,
 counter samples, raw event/filter/OF state and HPM inhibition bits. Restoration
 requires a stopped RV64 M-mode hart and validates the full snapshot before
