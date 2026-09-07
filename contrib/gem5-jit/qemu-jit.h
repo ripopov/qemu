@@ -123,6 +123,21 @@ GEM5_QEMU_JIT_API int gem5_qemu_jit_set_reservation_state(
     uint32_t instance_id, const Gem5QemuJitReservationState *state, size_t size);
 
 #define GEM5_QEMU_JIT_PMP_STATE_VERSION 1
+#define GEM5_QEMU_JIT_WRITE_NOTIFICATION_VERSION 1
+/* Notify a completed external physical write, including same-value writes.
+ * Call between runs, serialized with all backend calls, before any hart
+ * resumes. This changes monitors only, not memory, CSRs, or interrupts.
+ * The nonempty byte range must not wrap. All initialized harts are checked;
+ * malformed events or an active hart cause rejection before any mutation. */
+typedef struct Gem5QemuJitWriteNotification {
+    uint32_t version;
+    uint32_t size;
+    uint64_t physical_address;
+    uint64_t length;
+} Gem5QemuJitWriteNotification;
+GEM5_QEMU_JIT_API int gem5_qemu_jit_notify_physical_write(
+    const Gem5QemuJitWriteNotification *event, size_t size);
+
 #define GEM5_QEMU_JIT_MAX_PMPS 64
 /* Trusted migration state, not architectural CSR writes. Can replace locked
  * entries. Only between runs; mseccfg is separate from this PMP table. */

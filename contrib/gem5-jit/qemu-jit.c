@@ -25,6 +25,7 @@
 #include "system/replay.h"
 #include "system/system.h"
 #include "target/riscv/cpu.h"
+#include "target/riscv/jit_reservation.h"
 #include "target/riscv/tcg/pmu.h"
 
 #include <limits.h>
@@ -51,6 +52,31 @@ typedef struct Gem5QemuJitState {
 
 static Gem5QemuJitState jit;
 static Gem5QemuJitConfig jit_config;
+
+int gem5_qemu_jit_notify_physical_write(
+    const Gem5QemuJitWriteNotification *event, size_t size)
+{
+    uint32_t i;
+    if (!jit.initialized || !event || size != sizeof(*event) ||
+        event->version != GEM5_QEMU_JIT_WRITE_NOTIFICATION_VERSION ||
+        event->size != sizeof(*event) || !event->length ||
+        event->length - 1 > UINT64_MAX - event->physical_address) {
+        return -1;
+    }
+    for (i = 0; i < jit.hart_count; i++) {
+        if (jit.harts[i].initialized && jit.harts[i].running) {
+            return -1;
+        }
+    }
+    for (i = 0; i < jit.hart_count; i++) {
+        if (jit.harts[i].initialized) {
+            riscv_jit_reservation_write(&jit.harts[i].riscv_cpu->env,
+                event->physical_address,
+                event->physical_address + event->length - 1);
+        }
+    }
+    return 0;
+}
 
 /*
  * system/main.c owns this symbol in a normal QEMU executable. The embedded

@@ -873,7 +873,7 @@ reservation_smoke(int profile_test)
     memcpy(memory + 128, program, sizeof(program));
     memcpy(memory + 192, &interfering_store, sizeof(interfering_store));
     for (hart = 0; hart < 2; hart++) {
-        for (invalidate = 0; invalidate < 7; invalidate++) {
+        for (invalidate = 0; invalidate < 8; invalidate++) {
             memset(memory + 768, 0, 8);
             memory[768] = 17;
             if (gem5_qemu_jit_set_gpr(hart, 7, 768) ||
@@ -960,7 +960,7 @@ reservation_smoke(int profile_test)
                 /* Keep VA/value identical while changing the physical LR
                  * identity or width. Import is valid, but SC must not use
                  * that token for the current physical access. */
-                if (invalidate >= 5) {
+                if (invalidate == 5 || invalidate == 6) {
                     if (invalidate == 5) {
                         saved.physical_address += 64;
                     } else {
@@ -973,6 +973,16 @@ reservation_smoke(int profile_test)
                 }
             } else if (invalidate == 1) {
                 gem5_qemu_jit_invalidate_translations(hart);
+            }
+            if (invalidate == 7) {
+                const Gem5QemuJitWriteNotification event = {
+                    .version = GEM5_QEMU_JIT_WRITE_NOTIFICATION_VERSION,
+                    .size = sizeof(event), .physical_address = 768, .length = 1,
+                };
+                memory[768] = 17; /* completed same-value external write */
+                if (gem5_qemu_jit_notify_physical_write(&event, sizeof(event))) {
+                    return -1;
+                }
             }
             if (invalidate == 2 || invalidate == 4) {
                 unsigned other = hart ^ 1;
@@ -1004,6 +1014,72 @@ reservation_smoke(int profile_test)
     }
     puts("LR/SC: batch/mode preservation, snapshot validation/restore, "
          "invalidation and interference passed");
+    return 0;
+}
+
+static int external_write_smoke(void)
+{
+    Gem5QemuJitReservationState saved[2], observed;
+    Gem5QemuJitWriteNotification event = {
+        .version = GEM5_QEMU_JIT_WRITE_NOTIFICATION_VERSION,
+        .size = sizeof(event), .physical_address = 831, .length = 1,
+    };
+    unsigned hart, bad;
+    for (hart = 0; hart < 2; hart++) {
+        saved[hart] = (Gem5QemuJitReservationState) {
+            .version = GEM5_QEMU_JIT_RESERVATION_STATE_VERSION,
+            .size = sizeof(saved[hart]), .valid = 1,
+            .virtual_address = 4096 + hart * 4096, .expected_value = 17,
+            .physical_address = 768 + hart * 64, .access_size = 8,
+        };
+        if (gem5_qemu_jit_set_reservation_state(hart, &saved[hart],
+                                               sizeof(saved[hart]))) {
+            return -1;
+        }
+    }
+    for (bad = 0; bad < 4; bad++) {
+        Gem5QemuJitWriteNotification invalid = event;
+        switch (bad) {
+        case 0: invalid.version++; break;
+        case 1: invalid.size--; break;
+        case 2: invalid.length = 0; break;
+        case 3: invalid.physical_address = UINT64_MAX; invalid.length = 2; break;
+        }
+        if (!gem5_qemu_jit_notify_physical_write(&invalid, sizeof(invalid))) {
+            return -1;
+        }
+        for (hart = 0; hart < 2; hart++) {
+            if (gem5_qemu_jit_get_reservation_state(hart, &observed,
+                                                   sizeof(observed)) ||
+                memcmp(&saved[hart], &observed, sizeof(observed))) {
+                return -1;
+            }
+        }
+    }
+    /* Last byte in hart 0's block, just before hart 1's block. */
+    if (gem5_qemu_jit_notify_physical_write(&event, sizeof(event))) {
+        return -1;
+    }
+    for (hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_get_reservation_state(hart, &observed, sizeof(observed)) ||
+            observed.valid != hart ||
+            (hart && memcmp(&saved[hart], &observed, sizeof(observed))) ||
+            gem5_qemu_jit_set_reservation_state(hart, &saved[hart], sizeof(saved[hart]))) {
+            return -1;
+        }
+    }
+    /* Two-byte write crossing that boundary must invalidate both harts. */
+    event.length = 2;
+    if (gem5_qemu_jit_notify_physical_write(&event, sizeof(event))) {
+        return -1;
+    }
+    for (hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_get_reservation_state(hart, &observed, sizeof(observed)) ||
+            observed.valid) {
+            return -1;
+        }
+    }
+    puts("External writes: physical ranges, hart isolation and rejection atomicity passed");
     return 0;
 }
 
@@ -1272,7 +1348,7 @@ main(int argc, char **argv)
     if (pmp_execution_smoke()) {
         return 1;
     }
-    if (reservation_smoke(profile_test)) {
+    if (reservation_smoke(profile_test) || external_write_smoke()) {
         return 1;
     }
     if (profile_test && timer_smoke()) {

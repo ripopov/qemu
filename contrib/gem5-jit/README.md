@@ -146,6 +146,16 @@ passes continuation and cold restore on JIT and O3. The I/O fallback's
 partial-fault behavior is implemented but not yet directly qualified; general
 external/device writes still require host-side invalidation integration.
 
+The version-1 physical-write notification API is the host integration entry
+point: after a completed external write and before resuming any hart, submit
+its physical byte range with all harts stopped. It changes monitors only,
+using the same overlap policy as guest writes. Empty/wrapping ranges, bad
+versions/sizes, and calls during execution are rejected before mutation.
+Smokes cover same-value external write followed by failed SC, boundary-crossing
+ranges, unaffected-hart preservation, and malformed-event rejection atomicity.
+gem5 device/DMA callbacks are not yet connected: the API alone does not qualify
+platform device coherence or writes arriving during a backend run.
+
 SC revalidates its translated physical address and access width against the
 original LR metadata before attempting the comparison/store. The model
 permits success only for an exact address/width match; mismatch takes the

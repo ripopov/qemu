@@ -31,6 +31,7 @@
 #include "exec/target_page.h"
 #include "trace.h"
 #include "pmu.h"
+#include "target/riscv/jit_reservation.h"
 
 /* Embedded harts execute serially. Preserve a physical reservation identity
  * rather than comparing data values (which misses same-value peer stores).
@@ -99,11 +100,11 @@ void helper_jit_store_notify(CPURISCVState *env, target_ulong addr,
         }
         CPU_FOREACH(cpu) {
             CPURISCVState *peer = &RISCV_CPU(cpu)->env;
-            uint64_t block = peer->jit_load_paddr & ~UINT64_C(63);
-            if (peer->load_res != UINT64_MAX && peer->jit_load_size &&
-                (unknown || (block >= first && block <= last))) {
+            if (unknown) {
                 peer->load_res = UINT64_MAX;
                 peer->jit_load_size = 0;
+            } else {
+                riscv_jit_reservation_write(peer, first, last | UINT64_C(63));
             }
         }
         addr += chunk;
