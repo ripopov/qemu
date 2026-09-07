@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 
 static uint8_t memory[4096];
 static uint64_t host_time[2];
@@ -161,6 +162,92 @@ fixed_counter_transfer_smoke(void)
         }
     }
     puts("Fixed counters: two-hart frozen samples and rejection atomicity passed");
+    return 0;
+}
+
+static int
+counter_isolation_smoke(void)
+{
+    Gem5QemuJitFixedCounterState saved_fixed[2], fixed[2], observed_fixed;
+    Gem5QemuJitHpmState saved_hpm[2], hpm[2], observed_hpm;
+    uint64_t saved_pc[2], saved_pending[2], executed[2] = {0, 0};
+    uint32_t nops[32];
+    for (unsigned i = 0; i < 32; i++) {
+        nops[i] = 0x00000013;
+    }
+    memcpy(memory + 3072, nops, sizeof(nops));
+    for (unsigned hart = 0; hart < 2; hart++) {
+        saved_pc[hart] = gem5_qemu_jit_get_pc(hart);
+        saved_pending[hart] = gem5_qemu_jit_get_mip(hart);
+        gem5_qemu_jit_set_mip(hart, saved_pending[hart] & ~(UINT64_C(1) << 13));
+        if (gem5_qemu_jit_set_mode(hart, 3, 0) ||
+            gem5_qemu_jit_get_fixed_counters(hart, &saved_fixed[hart], sizeof(fixed[hart])) ||
+            gem5_qemu_jit_get_hpm_state(hart, &saved_hpm[hart], sizeof(hpm[hart]))) {
+            return -1;
+        }
+        fixed[hart] = saved_fixed[hart];
+        fixed[hart].inhibited = 0;
+        fixed[hart].cycle = 1000 + hart;
+        fixed[hart].instret = 2000 + hart;
+        hpm[hart] = saved_hpm[hart];
+        hpm[hart].inhibited = hpm[hart].implemented & ~UINT32_C(8);
+        memset(hpm[hart].counter, 0, sizeof(hpm[hart].counter));
+        memset(hpm[hart].event, 0, sizeof(hpm[hart].event));
+        hpm[hart].counter[3] = hart ? UINT64_MAX - 7 : 3000;
+        /* Hart 1 uses a noncurrent-mode filter to exercise mode snapshots. */
+        hpm[hart].event[3] = 2 | (hart ? UINT64_C(1) << 61 : 0);
+        if (gem5_qemu_jit_set_fixed_counters(hart, &fixed[hart], sizeof(fixed[hart])) ||
+            gem5_qemu_jit_set_hpm_state(hart, &hpm[hart], sizeof(hpm[hart]))) {
+            return -1;
+        }
+    }
+    for (unsigned round = 0; round < 4; round++) {
+        unsigned active = round & 1;
+        Gem5QemuJitRunResult result;
+        gem5_qemu_jit_set_pc(active, 3072);
+        gem5_qemu_jit_invalidate_translations(active);
+        unsigned remaining = 17;
+        for (unsigned attempt = 0; remaining && attempt < 64; attempt++) {
+            int rc = gem5_qemu_jit_run(active, remaining, &result);
+            if (rc || result.instructions > remaining ||
+                (result.reason != GEM5_QEMU_JIT_EXIT_BUDGET &&
+                 result.reason != GEM5_QEMU_JIT_EXIT_INTERRUPT)) {
+                fprintf(stderr, "counter isolation run failed: round %u rc %d "
+                        "reason %d instructions %" PRIu64 "\n",
+                        round, rc, result.reason, result.instructions);
+                return -1;
+            }
+            remaining -= result.instructions;
+        }
+        if (remaining) {
+            fprintf(stderr, "counter isolation stalled: round %u remaining %u\n",
+                    round, remaining);
+            return -1;
+        }
+        executed[active] += 17;
+        for (unsigned hart = 0; hart < 2; hart++) {
+            if (gem5_qemu_jit_get_fixed_counters(hart, &observed_fixed, sizeof(observed_fixed)) ||
+                gem5_qemu_jit_get_hpm_state(hart, &observed_hpm, sizeof(observed_hpm)) ||
+                observed_fixed.cycle != fixed[hart].cycle + executed[hart] ||
+                observed_fixed.instret != fixed[hart].instret + executed[hart] ||
+                observed_hpm.counter[3] != hpm[hart].counter[3] + executed[hart] ||
+                !!(observed_hpm.event[3] >> 63) != (hart && executed[hart] >= 8) ||
+                !!(gem5_qemu_jit_get_mip(hart) & (UINT64_C(1) << 13)) !=
+                    (hart && executed[hart] >= 8)) {
+                fprintf(stderr, "counter isolation failed: round %u hart %u\n", round, hart);
+                return -1;
+            }
+        }
+    }
+    for (unsigned hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_set_fixed_counters(hart, &saved_fixed[hart], sizeof(saved_fixed[hart])) ||
+            gem5_qemu_jit_set_hpm_state(hart, &saved_hpm[hart], sizeof(saved_hpm[hart]))) {
+            return -1;
+        }
+        gem5_qemu_jit_set_pc(hart, saved_pc[hart]);
+        gem5_qemu_jit_set_mip(hart, saved_pending[hart]);
+    }
+    puts("Counter isolation: alternating harts preserve inactive sources");
     return 0;
 }
 
@@ -990,6 +1077,9 @@ main(int argc, char **argv)
     }
     if (profile_test && fixed_counter_transfer_smoke()) {
         fprintf(stderr, "fixed-counter migration failed\n");
+        return 1;
+    }
+    if (profile_test && counter_isolation_smoke()) {
         return 1;
     }
     if (counter_restore_smoke()) {

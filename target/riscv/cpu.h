@@ -469,6 +469,9 @@ struct CPUArchState {
     /* TCG icount includes executed ECALL/EBREAK instructions, which do not
      * retire. This source correction is backend-local, not migrated state. */
     uint64_t pmu_unretired_insns;
+    /* Optional embedding-owned per-hart execution source. */
+    uint64_t (*external_pmu_ticks)(void *);
+    void *external_pmu_opaque;
 
     uint64_t sscratch;
     uint64_t mscratch;

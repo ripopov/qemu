@@ -36,6 +36,8 @@ typedef struct Gem5QemuJitHart {
     bool initialized;
     bool running;
     bool stimer_active;
+    uint64_t executed;
+    int64_t run_start;
 } Gem5QemuJitHart;
 
 typedef struct Gem5QemuJitState {
@@ -231,6 +233,17 @@ typedef struct Gem5QemuJitRunRequest {
     Gem5QemuJitRunResult result;
 } Gem5QemuJitRunRequest;
 
+static uint64_t
+jit_pmu_ticks(void *opaque)
+{
+    Gem5QemuJitHart *hart = opaque;
+    /* TCG harts run serially. Sample an in-flight delta only for this hart;
+     * paused peers must not inherit the global clock's execution progress.
+     * The embedded fast-forward model uses one cycle per execution tick. */
+    return hart->executed +
+        (hart->running ? icount_get_raw() - hart->run_start : 0);
+}
+
 static void
 jit_run_on_vcpu(CPUState *cpu, run_on_cpu_data data)
 {
@@ -260,13 +273,15 @@ jit_run_on_vcpu(CPUState *cpu, run_on_cpu_data data)
         hart->callbacks.run_begin(hart->callbacks.opaque);
     }
     before = icount_get_raw();
+    hart->run_start = before;
     budget = MIN(request->max_instructions, (uint64_t)INT32_MAX);
     icount_prepare_for_run(cpu, budget);
     hart->running = true;
     request->result.qemu_exception = tcg_cpu_exec(cpu);
-    hart->running = false;
     icount_process_data(cpu);
     after = icount_get_raw();
+    hart->executed += after - before;
+    hart->running = false;
     if (hart->callbacks.run_end) {
         hart->callbacks.run_end(hart->callbacks.opaque);
     }
@@ -365,6 +380,8 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks,
         hart->riscv_cpu->env.rdtime_fn_arg = hart;
         hart->riscv_cpu->env.external_timer_update = jit_timer_changed;
         hart->riscv_cpu->env.external_timer_opaque = hart;
+        hart->riscv_cpu->env.external_pmu_ticks = jit_pmu_ticks;
+        hart->riscv_cpu->env.external_pmu_opaque = hart;
         ++cpu_count;
     }
     if (cpu_count != jit.hart_count) {

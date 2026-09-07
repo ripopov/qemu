@@ -1320,7 +1320,8 @@ uint64_t riscv_pmu_ctr_get_fixed_counters_val(CPURISCVState *env,
 
     if (!cfg_val) {
         if (icount_enabled()) {
-                curr_val = inst ? riscv_pmu_instret_source(env) : icount_get();
+                curr_val = inst ? riscv_pmu_instret_source(env) :
+                                  riscv_pmu_cycle_source(env);
         } else {
             curr_val = cpu_get_host_ticks();
         }

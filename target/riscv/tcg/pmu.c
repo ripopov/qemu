@@ -63,7 +63,15 @@ static bool riscv_pmu_counter_enabled(RISCVCPU *cpu, uint32_t ctr_idx)
  */
 uint64_t riscv_pmu_instret_source(CPURISCVState *env)
 {
-    return icount_get_raw() - env->pmu_unretired_insns;
+    uint64_t ticks = env->external_pmu_ticks ?
+        env->external_pmu_ticks(env->external_pmu_opaque) : icount_get_raw();
+    return ticks - env->pmu_unretired_insns;
+}
+
+uint64_t riscv_pmu_cycle_source(CPURISCVState *env)
+{
+    return env->external_pmu_ticks ?
+        env->external_pmu_ticks(env->external_pmu_opaque) : icount_get();
 }
 
 static void riscv_pmu_icount_update_priv(CPURISCVState *env,
@@ -117,7 +125,7 @@ static void riscv_pmu_cycle_update_priv(CPURISCVState *env,
     uint64_t delta;
 
     if (icount_enabled()) {
-        current_ticks = icount_get();
+        current_ticks = riscv_pmu_cycle_source(env);
     } else {
         current_ticks = cpu_get_host_ticks();
     }
