@@ -1877,6 +1877,12 @@ static const uint64_t vs_delegable_ints =
     (VS_MODE_INTERRUPTS | LOCAL_INTERRUPTS) & ~MIP_LCOFIP;
 static const uint64_t all_ints = M_MODE_INTERRUPTS | S_MODE_INTERRUPTS |
                                      HS_MODE_INTERRUPTS | LOCAL_INTERRUPTS;
+
+static uint64_t supervisor_interrupt_mask(CPURISCVState *env)
+{
+    return S_MODE_INTERRUPTS | LOCAL_INTERRUPTS |
+        (env_archcpu(env)->cfg.ext_sscofpmf ? MIP_LCOFIP : 0);
+}
 #define DELEGABLE_EXCPS ((1ULL << (RISCV_EXCP_INST_ADDR_MIS)) | \
                          (1ULL << (RISCV_EXCP_INST_ACCESS_FAULT)) | \
                          (1ULL << (RISCV_EXCP_ILLEGAL_INST)) | \
@@ -2348,7 +2354,8 @@ static RISCVException rmw_mie64(CPURISCVState *env, int csrno,
                                 uint64_t *ret_val,
                                 uint64_t new_val, uint64_t wr_mask)
 {
-    uint64_t mask = wr_mask & all_ints;
+    uint64_t mask = wr_mask & (all_ints |
+        (env_archcpu(env)->cfg.ext_sscofpmf ? MIP_LCOFIP : 0));
 
     if (ret_val) {
         *ret_val = env->mie;
@@ -3147,6 +3154,18 @@ static RISCVException write_mcountinhibit(CPURISCVState *env, int csrno,
 
             /* Adjust the counter for later reads. */
             mhpmctr_val = curr_count - prev_count + mhpmctr_val;
+            /*
+             * Preserve a wrap before replacing the running counter baseline.
+             * The overflow timer may not have run yet; once inhibited, its
+             * callback cannot recover the wrap from the frozen value. OF and
+             * LCOFIP remain independent sticky state after inhibition.
+             */
+            if (cidx > 2 && cpu->cfg.ext_sscofpmf &&
+                mhpmctr_val < counter->mhpmcounter_val &&
+                !(env->mhpmevent_val[cidx] & MHPMEVENT_BIT_OF)) {
+                env->mhpmevent_val[cidx] |= MHPMEVENT_BIT_OF;
+                riscv_cpu_update_mip(env, MIP_LCOFIP, BOOL_TO_MASK(1));
+            }
             counter->mhpmcounter_val = mhpmctr_val;
         }
     }
@@ -3967,9 +3986,9 @@ static RISCVException rmw_mvip64(CPURISCVState *env, int csrno,
      *  alias_mask denotes the bits that come from mip nalias_mask denotes bits
      *  that come from hvip.
      */
-    uint64_t alias_mask = ((S_MODE_INTERRUPTS | LOCAL_INTERRUPTS) &
+    uint64_t alias_mask = (supervisor_interrupt_mask(env) &
         (env->mideleg | ~env->mvien)) | MIP_STIP;
-    uint64_t nalias_mask = (S_MODE_INTERRUPTS | LOCAL_INTERRUPTS) &
+    uint64_t nalias_mask = supervisor_interrupt_mask(env) &
         (~env->mideleg & env->mvien);
     uint64_t wr_mask_mvip;
     uint64_t wr_mask_mip;
@@ -3998,8 +4017,10 @@ static RISCVException rmw_mvip64(CPURISCVState *env, int csrno,
         alias_mask &= ~MIP_STIP;
     }
 
-    wr_mask_mip = wr_mask & alias_mask & mvip_writable_mask;
-    wr_mask_mvip = wr_mask & nalias_mask & mvip_writable_mask;
+    uint64_t writable_mask = mvip_writable_mask |
+        (cpu->cfg.ext_sscofpmf ? MIP_LCOFIP : 0);
+    wr_mask_mip = wr_mask & alias_mask & writable_mask;
+    wr_mask_mvip = wr_mask & nalias_mask & writable_mask;
 
     /*
      * For bits set in alias_mask, mvip needs to be alias of mip, so forward
@@ -4202,9 +4223,9 @@ static RISCVException rmw_sie64(CPURISCVState *env, int csrno,
                                 uint64_t *ret_val,
                                 uint64_t new_val, uint64_t wr_mask)
 {
-    uint64_t nalias_mask = (S_MODE_INTERRUPTS | LOCAL_INTERRUPTS) &
+    uint64_t nalias_mask = supervisor_interrupt_mask(env) &
         (~env->mideleg & env->mvien);
-    uint64_t alias_mask = (S_MODE_INTERRUPTS | LOCAL_INTERRUPTS) & env->mideleg;
+    uint64_t alias_mask = supervisor_interrupt_mask(env) & env->mideleg;
     uint64_t sie_mask = wr_mask & nalias_mask;
     RISCVException ret;
 
@@ -4449,7 +4470,8 @@ static RISCVException rmw_sip64(CPURISCVState *env, int csrno,
                                 uint64_t new_val, uint64_t wr_mask)
 {
     RISCVException ret;
-    uint64_t mask = (env->mideleg | env->mvien) & sip_writable_mask;
+    uint64_t mask = (env->mideleg | env->mvien) & (sip_writable_mask |
+        (env_archcpu(env)->cfg.ext_sscofpmf ? MIP_LCOFIP : 0));
 
     if (env->virt_enabled) {
         if (env->hvictl & HVICTL_VTI) {
