@@ -182,6 +182,29 @@ GEM5_QEMU_JIT_API int gem5_qemu_jit_set_csr(
     uint32_t instance_id, unsigned csr, uint64_t value);
 #define GEM5_QEMU_JIT_MSTATUS_RESTORE_VERSION 1
 #define GEM5_QEMU_JIT_STATEEN_VERSION 1
+#define GEM5_QEMU_JIT_HPM_STATE_VERSION 1
+/* Programmable HPM bank only; fixed cycle/instret, their inhibition bits,
+ * counter-access gates and interrupt pending state are owned separately.
+ * Values are counter samples, not QEMU source offsets or timer objects.
+ * Slots 0..2 and unimplemented slots must be zero. Restore requires a stopped
+ * RV64 hart in M mode, validates the whole input before mutation, and does
+ * not execute guest CSR writes or acknowledge/post an interrupt.
+ * The current QEMU event map supports only one counter per event selector;
+ * duplicate nonzero selectors are rejected instead of silently changing the
+ * selected counter during restore. Multi-counter event support remains open.
+ */
+typedef struct Gem5QemuJitHpmState {
+    uint32_t version;
+    uint32_t size;
+    uint32_t implemented;
+    uint32_t inhibited;
+    uint64_t counter[32];
+    uint64_t event[32];
+} Gem5QemuJitHpmState;
+GEM5_QEMU_JIT_API int gem5_qemu_jit_get_hpm_state(
+    uint32_t instance_id, Gem5QemuJitHpmState *state, size_t size);
+GEM5_QEMU_JIT_API int gem5_qemu_jit_set_hpm_state(
+    uint32_t instance_id, const Gem5QemuJitHpmState *state, size_t size);
 typedef struct Gem5QemuJitStateenState {
     uint32_t version;
     uint32_t size;

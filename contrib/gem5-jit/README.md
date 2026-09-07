@@ -5,6 +5,18 @@ test used by gem5's `RiscvJitCPU`. Together with the RISC-V translation hook
 and Meson target in the `gem5-jit` branch, it turns QEMU's RISC-V TCG engine
 into a dynamically loaded execution backend.
 
+The version-1 programmable HPM snapshot API transfers the implemented bank,
+counter samples, raw event/filter/OF state and HPM inhibition bits. Restoration
+requires a stopped RV64 M-mode hart and validates the full snapshot before
+mutation. It rebases backend sources and reconstructs timer scheduling without
+guest CSR-write side effects; fixed cycle/instret, their inhibition bits,
+counter-access gates and LCOFIP remain separate state owners. The profile smoke
+checks two-hart frozen-bank round trips, untouched pending/fixed inhibition,
+and atomic rejection of malformed snapshots. gem5 integration and active
+counter continuity are not yet qualified. Duplicate nonzero event selectors
+are rejected because the current QEMU event map selects only one counter per
+event; supporting multiple counters per event remains required work.
+
 The adapter supports multiple gem5 JitCPU objects in one process. The first
 adapter initialization fixes the instance count and creates one QEMU RISC-V
 vCPU per instance. Each vCPU receives a unique instance ID, gem5 hart ID, and

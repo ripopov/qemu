@@ -19,7 +19,7 @@
 #ifndef RISCV_PMU_H
 #define RISCV_PMU_H
 
-#include "cpu.h"
+#include "../cpu.h"
 #include "qapi/error.h"
 
 bool riscv_pmu_ctr_monitor_instructions(CPURISCVState *env,

@@ -25,6 +25,7 @@
 #include "system/replay.h"
 #include "system/system.h"
 #include "target/riscv/cpu.h"
+#include "target/riscv/tcg/pmu.h"
 
 #include <limits.h>
 
@@ -824,6 +825,110 @@ gem5_qemu_jit_restore_mstatus(uint32_t instance_id, unsigned version,
     env->mstatus = (env->mstatus & ~trap_mask) | (value & trap_mask);
     if ((old ^ env->mstatus) & trap_mask) {
         tlb_flush(hart->cpu);
+    }
+    return 0;
+}
+
+int
+gem5_qemu_jit_get_hpm_state(uint32_t instance_id,
+                          Gem5QemuJitHpmState *state, size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    if (!hart || hart->running || !state || size != sizeof(*state) ||
+        riscv_cpu_mxl(&hart->riscv_cpu->env) != MXL_RV64) {
+        return -1;
+    }
+    CPURISCVState *env = &hart->riscv_cpu->env;
+    memset(state, 0, sizeof(*state));
+    state->version = GEM5_QEMU_JIT_HPM_STATE_VERSION;
+    state->size = sizeof(*state);
+    state->implemented = hart->riscv_cpu->pmu_avail_ctrs & ~UINT32_C(7);
+    state->inhibited = env->mcountinhibit & state->implemented;
+    for (unsigned i = 3; i < 32; i++) {
+        if (!(state->implemented & (UINT32_C(1) << i))) {
+            continue;
+        }
+        state->event[i] = env->mhpmevent_val[i];
+        riscv_pmu_read_ctr(env, &state->counter[i], false, i);
+        /* Guest counter-write compensation may put the source baseline one
+         * ahead until the next instruction. Export the just-written sample,
+         * not the transient negative delta seen by an internal timer. */
+        if (!(state->inhibited & (UINT32_C(1) << i)) &&
+            icount_enabled() && riscv_pmu_ctr_monitor_instructions(env, i) &&
+            env->pmu_ctrs[i].mhpmcounter_prev ==
+                riscv_pmu_ctr_get_fixed_counters_val(env, i) + 1) {
+            state->counter[i] = env->pmu_ctrs[i].mhpmcounter_val;
+        }
+    }
+    return 0;
+}
+
+int
+gem5_qemu_jit_set_hpm_state(uint32_t instance_id,
+                          const Gem5QemuJitHpmState *state, size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    if (!hart || hart->running || !state || size != sizeof(*state) ||
+        state->version != GEM5_QEMU_JIT_HPM_STATE_VERSION ||
+        state->size != sizeof(*state)) {
+        return -1;
+    }
+    RISCVCPU *cpu = hart->riscv_cpu;
+    CPURISCVState *env = &cpu->env;
+    uint32_t implemented = cpu->pmu_avail_ctrs & ~UINT32_C(7);
+    if (riscv_cpu_mxl(env) != MXL_RV64 || env->priv != PRV_M ||
+        env->virt_enabled || state->implemented != implemented ||
+        (state->inhibited & ~implemented)) {
+        return -1;
+    }
+    uint64_t event_mask = ~MHPMEVENT_FILTER_MASK | MHPMEVENT_BIT_MINH;
+    event_mask |= riscv_has_ext(env, RVU) ? MHPMEVENT_BIT_UINH : 0;
+    event_mask |= riscv_has_ext(env, RVS) ? MHPMEVENT_BIT_SINH : 0;
+    event_mask |= riscv_has_ext(env, RVH) ? MHPMEVENT_BIT_VSINH : 0;
+    event_mask |= riscv_has_ext(env, RVH) && riscv_has_ext(env, RVU) ?
+        MHPMEVENT_BIT_VUINH : 0;
+    /* Reserved and absent slots cannot silently discard incoming state. */
+    for (unsigned i = 0; i < 32; i++) {
+        if (state->event[i] & ~event_mask) {
+            return -1;
+        }
+        if (!(implemented & (UINT32_C(1) << i)) &&
+            (state->counter[i] || state->event[i])) {
+            return -1;
+        }
+        uint64_t selector = state->event[i] & MHPMEVENT_IDX_MASK;
+        for (unsigned j = 3; selector && j < i; j++) {
+            if ((state->event[j] & MHPMEVENT_IDX_MASK) == selector) {
+                return -1;
+            }
+        }
+    }
+    if (cpu->pmu_timer) {
+        timer_del(cpu->pmu_timer);
+    }
+    if (cpu->pmu_event_ctr_map) {
+        g_hash_table_remove_all(cpu->pmu_event_ctr_map);
+    }
+    env->mcountinhibit = (env->mcountinhibit & ~implemented) | state->inhibited;
+    for (unsigned i = 3; i < 32; i++) {
+        env->mhpmevent_val[i] = state->event[i];
+        if (implemented & (UINT32_C(1) << i)) {
+            /* Unsupported guest event selectors remain stored but dormant,
+             * matching guest CSR writes. This is not an execution event. */
+            riscv_pmu_update_event_map(env, state->event[i], i);
+        }
+    }
+    for (unsigned i = 3; i < 32; i++) {
+        PMUCTRState *counter = &env->pmu_ctrs[i];
+        memset(counter, 0, sizeof(*counter));
+        if (!(implemented & (UINT32_C(1) << i))) {
+            continue;
+        }
+        counter->mhpmcounter_val = state->counter[i];
+        counter->mhpmcounter_prev = riscv_pmu_ctr_get_fixed_counters_val(env, i);
+        if (!(state->inhibited & (UINT32_C(1) << i))) {
+            riscv_pmu_setup_timer(env, state->counter[i], i);
+        }
     }
     return 0;
 }

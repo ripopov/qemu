@@ -54,6 +54,66 @@ memory_map(void *opaque, size_t index, uint64_t *guest_address, uint64_t *size,
 }
 
 static int
+hpm_transfer_smoke(void)
+{
+    Gem5QemuJitHpmState saved[2], state[2], observed, bad;
+    uint64_t pending[2], inhibit[2];
+    for (unsigned hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_set_mode(hart, 3, 0) ||
+            gem5_qemu_jit_get_hpm_state(hart, &saved[hart], sizeof(saved[hart])) ||
+            gem5_qemu_jit_get_csr(hart, 0x320, &inhibit[hart])) {
+            return -1;
+        }
+        pending[hart] = gem5_qemu_jit_get_mip(hart);
+        state[hart] = saved[hart];
+        state[hart].inhibited = state[hart].implemented;
+        for (unsigned i = 3; i < 32; i++) {
+            if (state[hart].implemented & (UINT32_C(1) << i)) {
+                state[hart].counter[i] = UINT64_C(0x1234567800000000) +
+                    hart * 256 + i;
+                state[hart].event[i] = (UINT64_C(1) << 63) |
+                    ((uint64_t)(i & 31) << 58);
+            }
+        }
+        if (gem5_qemu_jit_set_hpm_state(hart, &state[hart], sizeof(state[hart]))) {
+            return -1;
+        }
+    }
+    for (unsigned hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_get_hpm_state(hart, &observed, sizeof(observed)) ||
+            memcmp(&state[hart], &observed, sizeof(observed)) ||
+            gem5_qemu_jit_get_mip(hart) != pending[hart]) {
+            return -1;
+        }
+        for (unsigned trial = 0; trial < 6; trial++) {
+            bad = state[hart];
+            switch (trial) {
+            case 0: bad.version++; break;
+            case 1: bad.size--; break;
+            case 2: bad.implemented ^= 8; break;
+            case 3: bad.counter[1] = 1; break;
+            case 4: bad.inhibited |= 1; break;
+            case 5: bad.event[3] = bad.event[4] = 2; break;
+            }
+            if (!gem5_qemu_jit_set_hpm_state(hart, &bad, sizeof(bad)) ||
+                gem5_qemu_jit_get_hpm_state(hart, &observed, sizeof(observed)) ||
+                memcmp(&state[hart], &observed, sizeof(observed)) ||
+                gem5_qemu_jit_get_mip(hart) != pending[hart]) {
+                return -1;
+            }
+        }
+        uint64_t current_inhibit;
+        if (gem5_qemu_jit_get_csr(hart, 0x320, &current_inhibit) ||
+            (current_inhibit & 7) != (inhibit[hart] & 7) ||
+            gem5_qemu_jit_set_hpm_state(hart, &saved[hart], sizeof(saved[hart]))) {
+            return -1;
+        }
+    }
+    puts("HPM migration: two-hart frozen bank, OF and rejection atomicity passed");
+    return 0;
+}
+
+static int
 counter_restore_smoke(void)
 {
     for (unsigned hart = 0; hart < 2; hart++) {
@@ -873,6 +933,10 @@ main(int argc, char **argv)
         }
     }
 
+    if (profile_test && hpm_transfer_smoke()) {
+        fprintf(stderr, "HPM bank migration failed\n");
+        return 1;
+    }
     if (counter_restore_smoke()) {
         fprintf(stderr, "host counter restoration failed\n");
         return 1;
