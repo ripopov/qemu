@@ -1248,6 +1248,15 @@ static RISCVException write_mhpmevent(CPURISCVState *env, int csrno,
     int evt_index = csrno - CSR_MCOUNTINHIBIT;
     uint64_t mhpmevt_val;
     uint64_t inh_avail_mask;
+    target_ulong sample = 0;
+    bool rv64 = riscv_cpu_mxl(env) == MXL_RV64;
+
+    /* Settle the old subscription before replacing its source/filter.
+     * The raw source includes this CSR instruction, so it is charged under
+     * the old selector just as at the O3 retirement boundary. */
+    if (rv64) {
+        riscv_pmu_read_ctr(env, &sample, false, evt_index);
+    }
 
     if (riscv_cpu_mxl(env) == MXL_RV32) {
         mhpmevt_val = deposit64(env->mhpmevent_val[evt_index], 0, 32, val);
@@ -1264,6 +1273,22 @@ static RISCVException write_mhpmevent(CPURISCVState *env, int csrno,
 
     env->mhpmevent_val[evt_index] = mhpmevt_val;
     riscv_pmu_update_event_map(env, mhpmevt_val, evt_index);
+
+    if (rv64) {
+        PMUCTRState *counter = &env->pmu_ctrs[evt_index];
+        counter->mhpmcounter_val = sample;
+        counter->irq_overflow_left = 0;
+        if (riscv_pmu_ctr_monitor_cycles(env, evt_index) ||
+            riscv_pmu_ctr_monitor_instructions(env, evt_index)) {
+            counter->mhpmcounter_prev =
+                riscv_pmu_ctr_get_fixed_counters_val(env, evt_index);
+            if (!(env->mcountinhibit & BIT(evt_index))) {
+                riscv_pmu_setup_timer(env, sample, evt_index);
+            }
+        } else {
+            counter->mhpmcounter_prev = sample;
+        }
+    }
 
     return RISCV_EXCP_NONE;
 }
