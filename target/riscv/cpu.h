@@ -265,6 +265,9 @@ struct CPUArchState {
     uint64_t pc;
     uint64_t load_res;
     uint64_t load_val;
+    /* Embedded JIT's physical monitor; live iff load_res != UINT64_MAX. */
+    uint64_t jit_load_paddr;
+    uint32_t jit_load_size;
 
     /* Floating-Point state */
     uint64_t fpr[32]; /* assume both F and D extensions */

@@ -1161,6 +1161,11 @@ static bool gen_amo(DisasContext *ctx, arg_atomic *a,
     decode_save_opc(ctx, RISCV_UW2_ALWAYS_STORE_AMO);
     src1 = get_address(ctx, a->rs1, 0);
     func(dest, src1, src2, ctx->mem_idx, mop);
+    if (riscv_gem5_jit_enabled) {
+        gen_helper_jit_store_notify(tcg_env, src1,
+                                   tcg_constant_i32(memop_size(mop)),
+                                   tcg_constant_i32(ctx->mem_idx));
+    }
 
     gen_set_gpr(ctx, a->rd, dest);
     return true;

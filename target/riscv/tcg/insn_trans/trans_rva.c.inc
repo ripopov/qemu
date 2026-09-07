@@ -53,6 +53,11 @@ static bool gen_lr(DisasContext *ctx, arg_atomic *a, MemOp mop)
 
     /* Put addr in load_res, data in load_val.  */
     tcg_gen_mov_tl(load_res, src1);
+    if (riscv_gem5_jit_enabled) {
+        gen_helper_jit_reserve(tcg_env, src1,
+                              tcg_constant_i32(memop_size(mop)),
+                              tcg_constant_i32(ctx->mem_idx));
+    }
     gen_set_gpr(ctx, a->rd, load_val);
 
     return true;
@@ -80,6 +85,14 @@ static bool gen_sc(DisasContext *ctx, arg_atomic *a, MemOp mop)
     tcg_gen_atomic_cmpxchg_tl(dest, load_res, load_val, src2,
                               ctx->mem_idx, mop);
     tcg_gen_setcond_tl(TCG_COND_NE, dest, dest, load_val);
+    if (riscv_gem5_jit_enabled) {
+        TCGLabel *no_store = gen_new_label();
+        tcg_gen_brcondi_tl(TCG_COND_NE, dest, 0, no_store);
+        gen_helper_jit_store_notify(tcg_env, src1,
+                                   tcg_constant_i32(memop_size(mop)),
+                                   tcg_constant_i32(ctx->mem_idx));
+        gen_set_label(no_store);
+    }
     gen_set_gpr(ctx, a->rd, dest);
     tcg_gen_br(l2);
 

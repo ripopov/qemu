@@ -28,8 +28,67 @@
 #include "accel/tcg/probe.h"
 #include "exec/helper-proto.h"
 #include "exec/tlb-flags.h"
+#include "exec/target_page.h"
 #include "trace.h"
 #include "pmu.h"
+
+/* Embedded harts execute serially. Preserve a physical reservation identity
+ * rather than comparing data values (which misses same-value peer stores).
+ * The platform monitor granule is one aligned 64-byte block. */
+void helper_jit_reserve(CPURISCVState *env, target_ulong addr,
+                        uint32_t size, uint32_t mmu_idx)
+{
+#ifndef CONFIG_USER_ONLY
+    CPUTLBEntryFull *full;
+    void *host;
+    int flags = probe_access_full(env, addr, size, MMU_DATA_LOAD, mmu_idx,
+                                  true, &host, &full, GETPC());
+    if (flags & TLB_INVALID_MASK) {
+        env->load_res = UINT64_MAX;
+        env->jit_load_size = 0;
+        return;
+    }
+    env->jit_load_paddr = full->phys_addr | (addr & ~TARGET_PAGE_MASK);
+    env->jit_load_size = size;
+#endif
+}
+
+void helper_jit_store_notify(CPURISCVState *env, target_ulong addr,
+                             uint32_t size, uint32_t mmu_idx)
+{
+#ifndef CONFIG_USER_ONLY
+    CPUState *cpu;
+    /* Split cross-page stores before examining their physical extents. The
+     * original store has completed; never introduce another guest fault. */
+    while (size) {
+        CPUTLBEntryFull *full;
+        void *host;
+        unsigned chunk = MIN(size, TARGET_PAGE_SIZE -
+                             (addr & ~TARGET_PAGE_MASK));
+        int flags = probe_access_full(env, addr, chunk, MMU_DATA_STORE,
+                                      mmu_idx, true, &host, &full, GETPC());
+        bool unknown = flags & TLB_INVALID_MASK;
+        uint64_t first = unknown ? 0 :
+            (full->phys_addr | (addr & ~TARGET_PAGE_MASK)) & ~UINT64_C(63);
+        uint64_t last = first;
+        if (!unknown) {
+            last = (full->phys_addr | (addr & ~TARGET_PAGE_MASK)) + chunk - 1;
+            last &= ~UINT64_C(63);
+        }
+        CPU_FOREACH(cpu) {
+            CPURISCVState *peer = &RISCV_CPU(cpu)->env;
+            uint64_t block = peer->jit_load_paddr & ~UINT64_C(63);
+            if (peer->load_res != UINT64_MAX && peer->jit_load_size &&
+                (unknown || (block >= first && block <= last))) {
+                peer->load_res = UINT64_MAX;
+                peer->jit_load_size = 0;
+            }
+        }
+        addr += chunk;
+        size -= chunk;
+    }
+#endif
+}
 
 /* Exceptions processing helpers */
 G_NORETURN void riscv_raise_exception(CPURISCVState *env,

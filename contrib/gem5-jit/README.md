@@ -122,6 +122,15 @@ same-value write invalidations, and O3 monitor reconstruction require further
 integration. Neither full JIT checkpoint restoration nor cross-model LR/SC
 preservation is established by the backend snapshot test.
 
+Physical monitor work in progress: embedded LR records its translated physical
+address and width; ordinary scalar stores, AMOs and successful SC operations
+notify matching 64-byte physical reservation blocks, including direct-mapped
+RAM writes. Non-embedded QEMU translation does not emit these hooks. This
+repairs the scalar same-value peer-store continuation probe, but physical
+metadata is not yet included in the version-1 migration token: cold restore
+of the peer-interference probe still fails. Vector, FP, helper, CMO and device
+write paths, physical SC-address revalidation, and alias tests remain open.
+
 Embedded S/VS timers use an external-timer hook instead of QEMU's ACLINT
 timebase cast and native timer queue.
 
