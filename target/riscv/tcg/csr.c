@@ -1256,6 +1256,19 @@ static RISCVException write_mhpmevent(CPURISCVState *env, int csrno,
      * the old selector just as at the O3 retirement boundary. */
     if (rv64) {
         riscv_pmu_read_ctr(env, &sample, false, evt_index);
+        /* A guest event write may itself retire at the wrap boundary,
+         * before the deferred PMU timer runs. Preserve that interrupt
+         * request before rebasing makes the wrap invisible. The CSR write
+         * still determines the new OF bit; it does not acknowledge MIP.
+         * Trusted host restoration must not synthesize an interrupt. */
+        if (ra && riscv_cpu_cfg(env)->ext_sscofpmf &&
+            !(env->mcountinhibit & BIT(evt_index)) &&
+            !(env->mhpmevent_val[evt_index] & MHPMEVENT_BIT_OF) &&
+            (riscv_pmu_ctr_monitor_cycles(env, evt_index) ||
+             riscv_pmu_ctr_monitor_instructions(env, evt_index)) &&
+            sample < env->pmu_ctrs[evt_index].mhpmcounter_val) {
+            riscv_cpu_update_mip(env, MIP_LCOFIP, MIP_LCOFIP);
+        }
     }
 
     if (riscv_cpu_mxl(env) == MXL_RV32) {
