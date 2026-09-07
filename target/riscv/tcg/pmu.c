@@ -139,6 +139,29 @@ static void riscv_pmu_cycle_update_priv(CPURISCVState *env,
     counter_arr[env->priv] += delta;
 }
 
+void riscv_pmu_account_xret(CPURISCVState *env, privilege_mode_t oldpriv,
+                           bool oldvirt)
+{
+    uint64_t *old_counts, *new_snapshot;
+
+    if (!icount_enabled() ||
+        (oldpriv == env->priv && oldvirt == env->virt_enabled)) {
+        return;
+    }
+    /* set_mode sampled icount before this xRET retires. Attribute that
+     * pending instruction to its originating mode, and start the new mode
+     * after it. This path is for successful guest returns only: host mode
+     * restoration and trap entry must not manufacture a retirement.
+     */
+    old_counts = oldvirt ? env->pmu_fixed_ctrs[1].counter_virt :
+                          env->pmu_fixed_ctrs[1].counter;
+    new_snapshot = env->virt_enabled ?
+        env->pmu_fixed_ctrs[1].counter_virt_prev :
+        env->pmu_fixed_ctrs[1].counter_prev;
+    old_counts[oldpriv]++;
+    new_snapshot[env->priv]++;
+}
+
 void riscv_pmu_update_fixed_ctrs(CPURISCVState *env,
                                  privilege_mode_t newpriv,
                                  bool new_virt)

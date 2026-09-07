@@ -29,6 +29,7 @@
 #include "exec/helper-proto.h"
 #include "exec/tlb-flags.h"
 #include "trace.h"
+#include "pmu.h"
 
 /* Exceptions processing helpers */
 G_NORETURN void riscv_raise_exception(CPURISCVState *env,
@@ -285,6 +286,16 @@ void helper_sc_probe_write(CPURISCVState *env, target_ulong addr,
 
 #ifndef CONFIG_USER_ONLY
 
+static void riscv_xret_set_mode(CPURISCVState *env,
+                               privilege_mode_t newpriv, bool newvirt)
+{
+    privilege_mode_t oldpriv = env->priv;
+    bool oldvirt = env->virt_enabled;
+
+    riscv_cpu_set_mode(env, newpriv, newvirt);
+    riscv_pmu_account_xret(env, oldpriv, oldvirt);
+}
+
 target_ulong helper_sret(CPURISCVState *env)
 {
     uint64_t mstatus;
@@ -352,7 +363,7 @@ target_ulong helper_sret(CPURISCVState *env)
         }
     }
 
-    riscv_cpu_set_mode(env, prev_priv, prev_virt);
+    riscv_xret_set_mode(env, prev_priv, prev_virt);
 
     /*
      * If forward cfi enabled for new priv, restore elp status
@@ -439,7 +450,7 @@ target_ulong helper_mret(CPURISCVState *env)
         riscv_cpu_swap_hypervisor_regs(env);
     }
 
-    riscv_cpu_set_mode(env, prev_priv, prev_virt);
+    riscv_xret_set_mode(env, prev_priv, prev_virt);
     /*
      * If forward cfi enabled for new priv, restore elp status
      * and clear mpelp in mstatus
@@ -491,7 +502,7 @@ target_ulong helper_mnret(CPURISCVState *env)
         riscv_cpu_swap_hypervisor_regs(env);
     }
 
-    riscv_cpu_set_mode(env, prev_priv, prev_virt);
+    riscv_xret_set_mode(env, prev_priv, prev_virt);
 
     /*
      * If forward cfi enabled for new priv, restore elp status
