@@ -3754,9 +3754,11 @@ static RISCVException write_sstateen0(CPURISCVState *env, int csrno,
 }
 
 static RISCVException write_sstateen_1_3(CPURISCVState *env, int csrno,
-                                         target_ulong new_val, uintptr_t ra)
+                                        target_ulong new_val, uintptr_t ra)
 {
-    return write_sstateen(env, csrno, SMSTATEEN_STATEEN, new_val);
+    /* SE1/SE2/SE3 exist only at M/H level. No bits are currently defined
+     * in sstateen1..3; reserved supervisor bits must remain read-only zero. */
+    return write_sstateen(env, csrno, 0, new_val);
 }
 
 static RISCVException rmw_mip64(CPURISCVState *env, int csrno,

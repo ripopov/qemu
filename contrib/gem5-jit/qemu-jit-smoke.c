@@ -95,6 +95,25 @@ mstatus_restore_smoke(void)
 }
 
 static int
+stateen_reserved_smoke(void)
+{
+    for (unsigned hart = 0; hart < 2; hart++) {
+        for (unsigned index = 1; index < 4; index++) {
+            uint64_t saved, observed;
+            if (gem5_qemu_jit_get_csr(hart, 0x30c + index, &saved) ||
+                gem5_qemu_jit_set_csr(hart, 0x30c + index, UINT64_MAX) ||
+                gem5_qemu_jit_set_csr(hart, 0x10c + index, UINT64_MAX) ||
+                gem5_qemu_jit_get_csr(hart, 0x10c + index, &observed) ||
+                observed != 0 ||
+                gem5_qemu_jit_set_csr(hart, 0x30c + index, saved)) {
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int
 vector_state_smoke(void)
 {
     Gem5QemuJitVectorState saved[2], expected[2], observed, bad;
@@ -787,6 +806,10 @@ main(int argc, char **argv)
 
     if (profile_test && mstatus_restore_smoke()) {
         fprintf(stderr, "machine status restoration failed\n");
+        return 1;
+    }
+    if (profile_test && stateen_reserved_smoke()) {
+        fprintf(stderr, "reserved supervisor state-enable bits writable\n");
         return 1;
     }
     if (vector_state_smoke()) {
