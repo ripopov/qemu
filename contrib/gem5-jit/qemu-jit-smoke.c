@@ -45,6 +45,80 @@ memory_map(void *opaque, size_t index, uint64_t *guest_address, uint64_t *size,
     return 0;
 }
 
+static int
+vector_state_smoke(void)
+{
+    Gem5QemuJitVectorState saved[2], expected[2], observed, bad;
+    unsigned hart, reg, byte, test;
+
+    for (hart = 0; hart < 2; hart++) {
+        uint64_t status;
+        if (gem5_qemu_jit_get_csr(hart, 0x300, &status) ||
+            (status & (3u << 9)) ||
+            gem5_qemu_jit_get_vector_state(hart, &saved[hart],
+                                            sizeof(saved[hart]))) {
+            return -1;
+        }
+        expected[hart] = saved[hart];
+        expected[hart].vl = hart ? 0 : 7;
+        expected[hart].vstart = hart ? 0 : 3;
+        expected[hart].vtype = 0;
+        expected[hart].vill = hart;
+        expected[hart].vxrm = hart + 1;
+        expected[hart].vxsat = hart;
+        for (reg = 0; reg < 32; reg++) {
+            for (byte = 0; byte < expected[hart].vlenb; byte++) {
+                expected[hart].registers[reg][byte] =
+                    1 + hart * 71 + reg * 13 + byte;
+            }
+        }
+        if (gem5_qemu_jit_set_vector_state(hart, &expected[hart],
+                                            sizeof(expected[hart]))) {
+            return -1;
+        }
+    }
+    for (hart = 0; hart < 2; hart++) {
+        for (test = 0; test < 8; test++) {
+            size_t size = sizeof(bad);
+            bad = expected[hart];
+            switch (test) {
+            case 0: bad.version++; break;
+            case 1: bad.size--; break;
+            case 2: bad.vlenb *= 2; break;
+            case 3: bad.vxrm = 4; break;
+            case 4: bad.vxsat = 2; break;
+            case 5: bad.vill = 2; break;
+            case 6: size--; break;
+            case 7:
+                if (bad.vlenb == GEM5_QEMU_JIT_MAX_VLENB) {
+                    continue;
+                }
+                bad.registers[31][bad.vlenb] = 1;
+                break;
+            }
+            if (gem5_qemu_jit_set_vector_state(hart, &bad, size) == 0 ||
+                gem5_qemu_jit_get_vector_state(hart, &observed,
+                                                sizeof(observed)) ||
+                memcmp(&observed, &expected[hart], sizeof(observed))) {
+                return -1;
+            }
+        }
+        if (gem5_qemu_jit_get_vector_state(hart, NULL, sizeof(observed)) == 0 ||
+            gem5_qemu_jit_set_vector_state(hart, NULL, sizeof(observed)) == 0 ||
+            gem5_qemu_jit_get_vector_state(2, &observed,
+                                            sizeof(observed)) == 0 ||
+            gem5_qemu_jit_set_vector_state(2, &expected[hart],
+                                            sizeof(observed)) == 0 ||
+            gem5_qemu_jit_set_vector_state(hart, &saved[hart],
+                                            sizeof(saved[hart]))) {
+            return -1;
+        }
+        gem5_qemu_jit_invalidate_translations(hart);
+    }
+    puts("vector migration state: two-hart VS-Off round-trip passed");
+    return 0;
+}
+
 int
 main(void)
 {
@@ -115,6 +189,11 @@ main(void)
                     instance);
             return 1;
         }
+    }
+
+    if (vector_state_smoke()) {
+        fprintf(stderr, "vector migration state smoke failed\n");
+        return 1;
     }
 
     for (instance = 0; instance < 2; ++instance) {

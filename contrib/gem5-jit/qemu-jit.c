@@ -5,6 +5,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/bswap.h"
 
 #include "qemu-jit.h"
 
@@ -452,6 +453,84 @@ gem5_qemu_jit_set_priv(uint32_t instance_id, unsigned value)
         return -1;
     }
     riscv_cpu_set_mode(&hart->riscv_cpu->env, value, false);
+    return 0;
+}
+
+int
+gem5_qemu_jit_get_vector_state(uint32_t instance_id,
+                              Gem5QemuJitVectorState *state, size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    CPURISCVState *env;
+    unsigned reg, byte, vlenb;
+
+    if (!hart || !state || size != sizeof(*state)) {
+        return -1;
+    }
+    vlenb = hart->riscv_cpu->cfg.vlenb;
+    if (!vlenb || vlenb > GEM5_QEMU_JIT_MAX_VLENB || vlenb % 8) {
+        return -1;
+    }
+    env = &hart->riscv_cpu->env;
+    memset(state, 0, sizeof(*state));
+    state->version = GEM5_QEMU_JIT_VECTOR_STATE_VERSION;
+    state->size = sizeof(*state);
+    state->vlenb = vlenb;
+    state->vl = env->vl;
+    state->vstart = env->vstart;
+    state->vxrm = env->vxrm;
+    state->vxsat = env->vxsat;
+    state->vill = env->vill;
+    state->vtype = env->vtype;
+    for (reg = 0; reg < 32; reg++) {
+        for (byte = 0; byte < vlenb; byte += 8) {
+            stq_le_p(&state->registers[reg][byte],
+                     env->vreg[(reg * vlenb + byte) / 8]);
+        }
+    }
+    return 0;
+}
+
+int
+gem5_qemu_jit_set_vector_state(uint32_t instance_id,
+                              const Gem5QemuJitVectorState *state, size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    CPURISCVState *env;
+    unsigned reg, byte, vlenb;
+
+    if (!hart || !state || size != sizeof(*state) ||
+        state->version != GEM5_QEMU_JIT_VECTOR_STATE_VERSION ||
+        state->size != sizeof(*state)) {
+        return -1;
+    }
+    vlenb = hart->riscv_cpu->cfg.vlenb;
+    if (!vlenb || vlenb > GEM5_QEMU_JIT_MAX_VLENB || vlenb % 8 ||
+        state->vlenb != vlenb || state->vxrm > 3 ||
+        state->vxsat > 1 || state->vill > 1) {
+        return -1;
+    }
+    /* Validate the entire input before changing any architectural state. */
+    for (reg = 0; reg < 32; reg++) {
+        for (byte = vlenb; byte < GEM5_QEMU_JIT_MAX_VLENB; byte++) {
+            if (state->registers[reg][byte]) {
+                return -1;
+            }
+        }
+    }
+    env = &hart->riscv_cpu->env;
+    for (reg = 0; reg < 32; reg++) {
+        for (byte = 0; byte < vlenb; byte += 8) {
+            env->vreg[(reg * vlenb + byte) / 8] =
+                ldq_le_p(&state->registers[reg][byte]);
+        }
+    }
+    env->vl = state->vl;
+    env->vstart = state->vstart;
+    env->vxrm = state->vxrm;
+    env->vxsat = state->vxsat;
+    env->vill = state->vill;
+    env->vtype = state->vtype;
     return 0;
 }
 

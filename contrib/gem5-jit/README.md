@@ -22,6 +22,18 @@ The register API explicitly transfers FFLAGS and FRM even when
 state. Translation invalidation flushes both the vCPU TLB and the shared TCG
 translation-block cache before reverse takeover resumes.
 
+The additive version-1 vector migration-state API transfers all 32 registers
+as little-endian bytes at configured VLENB, plus VL, VSTART, VTYPE, VILL,
+VXRM and VXSAT. It preserves dormant state even with V/VS disabled. Import
+requires an exact version/size/VLEN match, valid small control fields and
+zero unused register bytes; rejection makes no state changes. The caller
+must be between runs and invalidate translations after restoration. This
+is an internal migration interface, not a validator for untrusted snapshots.
+The smoke test exercises two independent harts with VS Off, different
+register/control patterns and rejected malformed inputs. Vector execution,
+profile selection and gem5 consumption of this API are separate work; the
+default embedded CPU remains scalar.
+
 The shared library is a default build target whenever `riscv64-softmmu` is
 configured. A direct build can use:
 

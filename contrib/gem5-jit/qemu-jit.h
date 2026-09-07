@@ -61,6 +61,31 @@ typedef struct Gem5QemuJitRunResult {
     uint32_t m5_function;
 } Gem5QemuJitRunResult;
 
+#define GEM5_QEMU_JIT_VECTOR_STATE_VERSION 1
+#define GEM5_QEMU_JIT_MAX_VLENB 128
+/* Migration state, not guest CSR accesses. Register bytes are little-endian;
+ * bytes beyond vlenb in every register must be zero. VILL is separate from
+ * QEMU's VTYPE payload. Call only between runs, and invalidate translations
+ * after importing architectural state before resuming execution. This API
+ * also preserves dormant state when V or mstatus.VS is disabled. */
+typedef struct Gem5QemuJitVectorState {
+    uint32_t version;
+    uint32_t size;
+    uint32_t vlenb;
+    uint32_t vl;
+    uint32_t vstart;
+    uint32_t vxrm;
+    uint32_t vxsat;
+    uint32_t vill;
+    uint64_t vtype;
+    uint8_t registers[32][GEM5_QEMU_JIT_MAX_VLENB];
+} Gem5QemuJitVectorState;
+
+GEM5_QEMU_JIT_API int gem5_qemu_jit_get_vector_state(
+    uint32_t instance_id, Gem5QemuJitVectorState *state, size_t size);
+GEM5_QEMU_JIT_API int gem5_qemu_jit_set_vector_state(
+    uint32_t instance_id, const Gem5QemuJitVectorState *state, size_t size);
+
 /*
  * One backend image owns all embedded QEMU vCPUs. Each instance ID selects
  * independent architectural, software-TLB, and transient state for one
