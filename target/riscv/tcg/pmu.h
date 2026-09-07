@@ -38,6 +38,8 @@ void riscv_pmu_account_xret(CPURISCVState *env, privilege_mode_t oldpriv,
                            bool oldvirt);
 void riscv_pmu_update_fixed_ctrs(CPURISCVState *env, privilege_mode_t newpriv,
                                  bool new_virt);
+uint64_t riscv_pmu_ctr_get_fixed_counters_val(CPURISCVState *env,
+                                            int counter_idx);
 RISCVException riscv_pmu_read_ctr(CPURISCVState *env, target_ulong *val,
                                   bool upper_half, uint32_t ctr_idx);
 

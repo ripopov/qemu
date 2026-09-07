@@ -386,6 +386,19 @@ static void pmu_timer_trigger_irq(RISCVCPU *cpu,
         return;
     }
 
+    /*
+     * A guest instruction-counter write advances its baseline by one to
+     * suppress the writing instruction's increment. A stale timer can run
+     * at that instruction boundary, before the source reaches the adjusted
+     * baseline. Do not mistake this transient -1 delta for counter overflow.
+     */
+    if (icount_enabled() &&
+        riscv_pmu_ctr_monitor_instructions(env, ctr_idx) &&
+        counter->mhpmcounter_prev ==
+            riscv_pmu_ctr_get_fixed_counters_val(env, ctr_idx) + 1) {
+        riscv_pmu_setup_timer(env, counter->mhpmcounter_val, ctr_idx);
+        return;
+    }
     riscv_pmu_read_ctr(env, (target_ulong *)&curr_ctr_val, false, ctr_idx);
     ctr_val = counter->mhpmcounter_val;
     if (riscv_cpu_mxl(env) == MXL_RV32) {
@@ -427,6 +440,9 @@ int riscv_pmu_setup_timer(CPURISCVState *env, uint64_t value, uint32_t ctr_idx)
     int64_t overflow_ns, overflow_left = 0;
     RISCVCPU *cpu = env_archcpu(env);
     PMUCTRState *counter = &env->pmu_ctrs[ctr_idx];
+
+    /* A new counter value replaces any previously split deadline. */
+    counter->irq_overflow_left = 0;
 
     /* No need to setup a timer if LCOFI is disabled when OF is set */
     if (!riscv_pmu_counter_valid(cpu, ctr_idx) || !cpu->cfg.ext_sscofpmf ||

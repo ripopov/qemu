@@ -1300,7 +1300,7 @@ static RISCVException write_mhpmeventh(CPURISCVState *env, int csrno,
     return RISCV_EXCP_NONE;
 }
 
-static uint64_t riscv_pmu_ctr_get_fixed_counters_val(CPURISCVState *env,
+uint64_t riscv_pmu_ctr_get_fixed_counters_val(CPURISCVState *env,
                                                      int counter_idx)
 {
     int inst = riscv_pmu_ctr_monitor_instructions(env, counter_idx);

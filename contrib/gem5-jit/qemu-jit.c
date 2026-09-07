@@ -378,6 +378,15 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks,
      */
     replay_mutex_unlock();
 
+    /*
+     * -S keeps QEMU's autonomous vCPU loop stopped, but the embedded icount
+     * executor must still service its virtual deadlines (notably PMU
+     * overflow). This clock advances only through explicit TCG execution;
+     * gem5 continues to own TIME and S/VS timer levels through our callbacks.
+     * Do not resume the QEMU vCPUs here.
+     */
+    qemu_clock_enable(QEMU_CLOCK_VIRTUAL, true);
+
     memory_region_init_io(&jit.memory, NULL, &jit_memory_ops, &jit,
                           "gem5-jit-physical-memory", UINT64_MAX);
     memory_region_add_subregion(get_system_memory(), 0, &jit.memory);
