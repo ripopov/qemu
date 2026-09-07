@@ -65,6 +65,11 @@ void riscv_timer_write_timecmp(CPURISCVState *env, QEMUTimer *timer,
     uint64_t rtc_r;
     RISCVCPU *cpu;
 
+    if (env->external_timer_update) {
+        env->external_timer_update(env->external_timer_opaque);
+        return;
+    }
+
     if (!riscv_cpu_cfg(env)->ext_sstc || !env->rdtime_fn ||
         !env->rdtime_fn_arg || !get_field(env->menvcfg, MENVCFG_STCE)) {
         /* S/VS Timer IRQ depends on sstc extension, rdtime_fn(), and STCE. */
@@ -166,6 +171,10 @@ void riscv_timer_write_timecmp(CPURISCVState *env, QEMUTimer *timer,
 static void riscv_timer_disable_timecmp(CPURISCVState *env, QEMUTimer *timer,
                                  uint32_t timer_irq)
 {
+    if (env->external_timer_update) {
+        env->external_timer_update(env->external_timer_opaque);
+        return;
+    }
     /* Disable S-mode Timer IRQ and HW-based STIP */
     if ((timer_irq == MIP_STIP) && !get_field(env->menvcfg, MENVCFG_STCE)) {
         riscv_accel_set_irq(env_archcpu(env), timer_irq, BOOL_TO_MASK(0));

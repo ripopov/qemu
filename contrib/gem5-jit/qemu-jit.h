@@ -57,6 +57,27 @@ typedef struct Gem5QemuJitConfig {
     uint32_t vlenb;
 } Gem5QemuJitConfig;
 
+#define GEM5_QEMU_JIT_TIMER_STATE_VERSION 1
+#define GEM5_QEMU_JIT_STIMER_ENABLED 1u
+#define GEM5_QEMU_JIT_VSTIMER_ENABLED 2u
+#define GEM5_QEMU_JIT_STIMER_PENDING 4u
+#define GEM5_QEMU_JIT_VSTIMER_PENDING 8u
+typedef struct Gem5QemuJitTimerState {
+    uint32_t version;
+    uint32_t size;
+    uint32_t flags;
+    uint32_t reserved;
+    uint64_t time;
+    uint64_t stimecmp;
+    uint64_t vstimecmp;
+    uint64_t htimedelta;
+} Gem5QemuJitTimerState;
+/* Between runs, update timer levels from read_time and export deadlines.
+ * The host must schedule future refreshes and bound execution by deadlines.
+ * Timer-control writes during execution request an early batch boundary. */
+GEM5_QEMU_JIT_API int gem5_qemu_jit_refresh_timers(
+    uint32_t instance_id, Gem5QemuJitTimerState *state, size_t size);
+
 enum Gem5QemuJitExitReason {
     GEM5_QEMU_JIT_EXIT_BUDGET = 0,
     GEM5_QEMU_JIT_EXIT_HALTED = 1,

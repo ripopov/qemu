@@ -58,6 +58,23 @@ this same path. The profile smoke tests S/VS status, trap vector, scratch,
 EPC, cause, trap value and SATP banks, guest updates across VS/VU transitions,
 and legacy M-mode borrowing; invalid requests must preserve the active mode.
 
+Embedded S/VS timers use an external-timer hook instead of QEMU's ACLINT
+timebase cast and native timer queue. `gem5_qemu_jit_refresh_timers` samples
+the host's `read_time`, updates hardware pending levels and returns versioned
+time/compare/offset/gate metadata. The host must schedule its next deadline
+and cap execution batches accordingly. Timer-control writes request an early
+batch boundary so a newly programmed deadline can be scheduled before more
+guest instructions run. This is the backend half of scheduling; gem5 event
+integration is still pending. Other QEMU timers such as PMU timers are not
+covered by this hook.
+
+The profile smoke tests threshold equality, STCE gates, unsigned time and
+offset wrap, software STIP with SSTC disabled, and independent software
+HVIP versus hardware VS timer sources. The fork fixes two existing paths
+that suppressed HVIP writes while SSTC was active. An executed STIMECMP
+write must return after one instruction of a two-instruction budget; the
+following instruction executes only on the next run.
+
 The shared library is a default build target whenever `riscv64-softmmu` is
 configured. A direct build can use:
 

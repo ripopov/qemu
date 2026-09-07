@@ -578,8 +578,8 @@ uint64_t riscv_cpu_update_mip(CPURISCVState *env, uint64_t mask, uint64_t value)
 {
     uint64_t old = env->mip;
 
-    /* No need to update mip for VSTIP */
-    mask = ((mask == MIP_VSTIP) && env->vstime_irq) ? 0 : mask;
+    /* Software-injected VSTIP is stored in mip independently of vstime_irq.
+     * A pending hardware timer must not suppress writes to that source. */
 
     BQL_LOCK_GUARD();
 

@@ -19,6 +19,7 @@
 #include "hw/core/cpu.h"
 #include "qemu-main.h"
 #include "qemu/main-loop.h"
+#include "qemu/timer.h"
 #include "system/address-spaces.h"
 #include "system/memory.h"
 #include "system/replay.h"
@@ -32,6 +33,8 @@ typedef struct Gem5QemuJitHart {
     CPUState *cpu;
     RISCVCPU *riscv_cpu;
     bool initialized;
+    bool running;
+    bool stimer_active;
 } Gem5QemuJitHart;
 
 typedef struct Gem5QemuJitState {
@@ -93,6 +96,70 @@ jit_read_time(void *opaque)
         return 0;
     }
     return state->callbacks.read_time(state->callbacks.opaque);
+}
+
+static void
+jit_refresh_timers(Gem5QemuJitHart *hart, Gem5QemuJitTimerState *state)
+{
+    CPURISCVState *env = &hart->riscv_cpu->env;
+    uint64_t now = jit_read_time(hart);
+    bool enabled = hart->riscv_cpu->cfg.ext_sstc &&
+                   (env->menvcfg & MENVCFG_STCE);
+    bool venabled = enabled && riscv_has_ext(env, RVH) &&
+                    (env->henvcfg & HENVCFG_STCE);
+    bool pending = enabled && now >= env->stimecmp;
+    bool vpending = venabled && now + env->htimedelta >= env->vstimecmp;
+
+    /* Never leave native QEMU deadlines armed in an embedded hart. */
+    if (env->stimer) {
+        timer_del(env->stimer);
+    }
+    if (env->vstimer) {
+        timer_del(env->vstimer);
+    }
+    if (enabled || hart->stimer_active) {
+        riscv_cpu_update_mip(env, MIP_STIP, pending ? MIP_STIP : 0);
+    }
+    hart->stimer_active = enabled;
+    /* Hardware VS timer pending is separate from software-injected HVIP. */
+    env->vstime_irq = vpending;
+    riscv_cpu_update_mip(env, 0, 0);
+    if (state) {
+        *state = (Gem5QemuJitTimerState) {
+            .version = GEM5_QEMU_JIT_TIMER_STATE_VERSION,
+            .size = sizeof(*state),
+            .flags = (enabled ? GEM5_QEMU_JIT_STIMER_ENABLED : 0) |
+                     (venabled ? GEM5_QEMU_JIT_VSTIMER_ENABLED : 0) |
+                     (pending ? GEM5_QEMU_JIT_STIMER_PENDING : 0) |
+                     (vpending ? GEM5_QEMU_JIT_VSTIMER_PENDING : 0),
+            .time = now,
+            .stimecmp = env->stimecmp,
+            .vstimecmp = env->vstimecmp,
+            .htimedelta = env->htimedelta,
+        };
+    }
+}
+
+static void
+jit_timer_changed(void *opaque)
+{
+    Gem5QemuJitHart *hart = opaque;
+    jit_refresh_timers(hart, NULL);
+    if (hart->running) {
+        cpu_exit(hart->cpu);
+    }
+}
+
+int
+gem5_qemu_jit_refresh_timers(uint32_t instance_id,
+                           Gem5QemuJitTimerState *state, size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    if (!hart || !state || size != sizeof(*state) || hart->running) {
+        return -1;
+    }
+    jit_refresh_timers(hart, state);
+    return 0;
 }
 
 static MemTxResult
@@ -194,7 +261,9 @@ jit_run_on_vcpu(CPUState *cpu, run_on_cpu_data data)
     before = icount_get_raw();
     budget = MIN(request->max_instructions, (uint64_t)INT32_MAX);
     icount_prepare_for_run(cpu, budget);
+    hart->running = true;
     request->result.qemu_exception = tcg_cpu_exec(cpu);
+    hart->running = false;
     icount_process_data(cpu);
     after = icount_get_raw();
     if (hart->callbacks.run_end) {
@@ -290,6 +359,8 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks,
         hart->riscv_cpu->env.mhartid = cpu->cpu_index;
         hart->riscv_cpu->env.rdtime_fn = jit_read_time;
         hart->riscv_cpu->env.rdtime_fn_arg = hart;
+        hart->riscv_cpu->env.external_timer_update = jit_timer_changed;
+        hart->riscv_cpu->env.external_timer_opaque = hart;
         ++cpu_count;
     }
     if (cpu_count != jit.hart_count) {

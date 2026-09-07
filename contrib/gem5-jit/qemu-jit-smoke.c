@@ -11,6 +11,13 @@
 #include <string.h>
 
 static uint8_t memory[4096];
+static uint64_t host_time[2];
+
+static uint64_t
+read_time(void *opaque)
+{
+    return *(uint64_t *)opaque;
+}
 
 static int
 memory_read(void *opaque, uint64_t address, uint8_t *data, size_t size)
@@ -252,6 +259,111 @@ virtual_mode_smoke(void)
     return 0;
 }
 
+static int
+timer_smoke(void)
+{
+    const unsigned csrs[] = {0x30a, 0x60a, 0x14d, 0x24d, 0x605, 0x645};
+    uint64_t saved[6], value, mip;
+    Gem5QemuJitTimerState state;
+    Gem5QemuJitRunResult result;
+    /* csrw stimecmp,x5; addi x6,x0,1 */
+    const uint32_t program[] = {0x14d29073, 0x00100313};
+    unsigned hart, i;
+    const uint64_t stce = UINT64_C(1) << 63;
+    memcpy(memory + 96, program, sizeof(program));
+    for (hart = 0; hart < 2; hart++) {
+        mip = gem5_qemu_jit_get_mip(hart);
+        for (i = 0; i < 6; i++) {
+            if (gem5_qemu_jit_get_csr(hart, csrs[i], &saved[i])) {
+                fprintf(stderr, "timer save hart %u CSR %#x failed\n", hart, csrs[i]);
+                return -1;
+            }
+        }
+        host_time[hart] = 10;
+        if (gem5_qemu_jit_set_csr(hart, 0x14d, 20) ||
+            gem5_qemu_jit_set_csr(hart, 0x24d, 25) ||
+            gem5_qemu_jit_set_csr(hart, 0x605, 5) ||
+            gem5_qemu_jit_set_csr(hart, 0x30a, saved[0] | stce) ||
+            gem5_qemu_jit_set_csr(hart, 0x60a, saved[1] | stce) ||
+            gem5_qemu_jit_refresh_timers(hart, &state, sizeof(state)) ||
+            state.flags != 3 || state.time != 10 || state.stimecmp != 20 ||
+            state.vstimecmp != 25 || state.htimedelta != 5) {
+            fprintf(stderr, "timer setup hart %u flags=%u\n", hart, state.flags);
+            return -1;
+        }
+        host_time[hart] = 20;
+        if (gem5_qemu_jit_refresh_timers(hart, &state, sizeof(state)) ||
+            state.flags != 15 || !(gem5_qemu_jit_get_mip(hart) & (1u << 5)) ||
+            gem5_qemu_jit_set_csr(hart, 0x645, 0) ||
+            gem5_qemu_jit_get_csr(hart, 0x645, &value) ||
+            (value & (1u << 6)) ||
+            gem5_qemu_jit_get_csr(hart, 0x644, &value) ||
+            !(value & (1u << 6)) ||
+            gem5_qemu_jit_set_csr(hart, 0x645, 1u << 6) ||
+            gem5_qemu_jit_set_csr(hart, 0x60a, saved[1] & ~stce) ||
+            gem5_qemu_jit_refresh_timers(hart, &state, sizeof(state)) ||
+            state.flags != 5 ||
+            gem5_qemu_jit_get_csr(hart, 0x645, &value) ||
+            !(value & (1u << 6))) {
+            fprintf(stderr, "timer gates hart %u flags=%u hvip=%llx\n", hart,
+                    state.flags, (unsigned long long)value);
+            return -1;
+        }
+        host_time[hart] = UINT64_MAX;
+        if (gem5_qemu_jit_set_csr(hart, 0x14d, UINT64_MAX) ||
+            gem5_qemu_jit_set_csr(hart, 0x605, 1) ||
+            gem5_qemu_jit_set_csr(hart, 0x60a, saved[1] | stce) ||
+            gem5_qemu_jit_refresh_timers(hart, &state, sizeof(state)) ||
+            state.flags != 7) {
+            fprintf(stderr, "timer max hart %u flags=%u\n", hart, state.flags);
+            return -1;
+        }
+        host_time[hart] = 0;
+        if (gem5_qemu_jit_refresh_timers(hart, &state, sizeof(state)) ||
+            state.flags != 3 ||
+            gem5_qemu_jit_set_csr(hart, 0x30a, saved[0] & ~stce) ||
+            gem5_qemu_jit_refresh_timers(hart, &state, sizeof(state)) ||
+            state.flags || (gem5_qemu_jit_get_mip(hart) & (1u << 5))) {
+            fprintf(stderr, "timer wrap hart %u flags=%u\n", hart, state.flags);
+            return -1;
+        }
+        gem5_qemu_jit_set_mip(hart, mip | (1u << 5));
+        if (gem5_qemu_jit_refresh_timers(hart, &state, sizeof(state)) ||
+            !(gem5_qemu_jit_get_mip(hart) & (1u << 5))) {
+            fprintf(stderr, "timer software STIP hart %u failed\n", hart);
+            return -1;
+        }
+        if (gem5_qemu_jit_set_csr(hart, 0x30a, saved[0] | stce) ||
+            gem5_qemu_jit_set_gpr(hart, 5, 100) ||
+            gem5_qemu_jit_set_gpr(hart, 6, 0)) {
+            return -1;
+        }
+        gem5_qemu_jit_set_pc(hart, 96);
+        gem5_qemu_jit_invalidate_translations(hart);
+        if (gem5_qemu_jit_run(hart, 2, &result) ||
+            result.reason != GEM5_QEMU_JIT_EXIT_INTERRUPT ||
+            result.instructions != 1 || gem5_qemu_jit_get_pc(hart) != 100 ||
+            gem5_qemu_jit_get_gpr(hart, 6) != 0 ||
+            gem5_qemu_jit_refresh_timers(hart, &state, sizeof(state)) ||
+            state.stimecmp != 100 ||
+            gem5_qemu_jit_run(hart, 1, &result) ||
+            result.reason != GEM5_QEMU_JIT_EXIT_BUDGET ||
+            gem5_qemu_jit_get_gpr(hart, 6) != 1) {
+            fprintf(stderr, "timer CSR batch boundary hart %u failed\n", hart);
+            return -1;
+        }
+        for (i = 0; i < 6; i++) {
+            if (gem5_qemu_jit_set_csr(hart, csrs[i], saved[i])) {
+                fprintf(stderr, "timer restore hart %u CSR %#x failed\n", hart, csrs[i]);
+                return -1;
+            }
+        }
+        gem5_qemu_jit_set_mip(hart, mip);
+    }
+    puts("host timers: deadlines, gates, wrap and independent HVIP passed");
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -267,6 +379,8 @@ main(int argc, char **argv)
             .memory_read = memory_read,
             .memory_write = memory_write,
             .memory_map = memory_map,
+            .read_time = read_time,
+            .opaque = &host_time[0],
         },
         {
             .instance_id = 1,
@@ -275,6 +389,8 @@ main(int argc, char **argv)
             .memory_read = memory_read,
             .memory_write = memory_write,
             .memory_map = memory_map,
+            .read_time = read_time,
+            .opaque = &host_time[1],
         },
     };
     Gem5QemuJitRunResult results[2];
@@ -479,6 +595,10 @@ main(int argc, char **argv)
         }
     }
 
+    if (profile_test && timer_smoke()) {
+        fprintf(stderr, "host timer smoke failed\n");
+        return 1;
+    }
     if (profile_test && vector_execution_smoke()) {
         fprintf(stderr, "RVA23 vector execution smoke failed\n");
         return 1;

@@ -500,6 +500,9 @@ struct CPUArchState {
     /* machine specific rdtime callback */
     uint64_t (*rdtime_fn)(void *);
     void *rdtime_fn_arg;
+    /* Optional embedding-owned S/VS timer scheduling instead of ACLINT. */
+    void (*external_timer_update)(void *);
+    void *external_timer_opaque;
 
     /* machine specific AIA ireg read-modify-write callback */
     aia_ireg_rmw_fn aia_ireg_rmw_cb[4];

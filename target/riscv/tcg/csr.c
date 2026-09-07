@@ -3779,8 +3779,10 @@ static RISCVException rmw_mip64(CPURISCVState *env, int csrno,
         new_val |= env->external_seip * MIP_SEIP;
     }
 
-    if (riscv_cpu_cfg(env)->ext_sstc && (env->priv == PRV_M) &&
+    if (csrno != CSR_HVIP &&
+        riscv_cpu_cfg(env)->ext_sstc && (env->priv == PRV_M) &&
         get_field(env->menvcfg, MENVCFG_STCE)) {
+        /* HVIP remains an independent writable injection source. */
         /* sstc extension forbids STIP & VSTIP to be writeable in mip */
 
         /* STIP is not writable when menvcfg.STCE is enabled. */
