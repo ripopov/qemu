@@ -873,7 +873,7 @@ reservation_smoke(int profile_test)
     memcpy(memory + 128, program, sizeof(program));
     memcpy(memory + 192, &interfering_store, sizeof(interfering_store));
     for (hart = 0; hart < 2; hart++) {
-        for (invalidate = 0; invalidate < 4; invalidate++) {
+        for (invalidate = 0; invalidate < 5; invalidate++) {
             memset(memory + 768, 0, 8);
             memory[768] = 17;
             if (gem5_qemu_jit_set_gpr(hart, 7, 768) ||
@@ -897,7 +897,7 @@ reservation_smoke(int profile_test)
                  gem5_qemu_jit_set_mode(hart, 3, 0))) {
                 return -1;
             }
-            if (invalidate == 3) {
+            if (invalidate >= 3) {
                 Gem5QemuJitReservationState saved, invalid, observed;
                 Gem5QemuJitReservationState peer_before, peer_after;
                 unsigned bad;
@@ -906,11 +906,12 @@ reservation_smoke(int profile_test)
                     saved.version != GEM5_QEMU_JIT_RESERVATION_STATE_VERSION ||
                     saved.size != sizeof(saved) || saved.valid != 1 ||
                     saved.reserved || saved.virtual_address != 768 ||
-                    saved.expected_value != 17) {
+                    saved.expected_value != 17 || saved.physical_address != 768 ||
+                    saved.access_size != 8 || saved.reserved2) {
                     return -1;
                 }
                 /* Every rejected import must leave the live token intact. */
-                for (bad = 0; bad < 6; bad++) {
+                for (bad = 0; bad < 10; bad++) {
                     invalid = saved;
                     switch (bad) {
                     case 0: invalid.version++; break;
@@ -919,6 +920,10 @@ reservation_smoke(int profile_test)
                     case 3: invalid.valid = 2; break;
                     case 4: invalid.valid = 0; break;
                     case 5: invalid.virtual_address = UINT64_MAX; break;
+                    case 6: invalid.reserved2 = 1; break;
+                    case 7: invalid.access_size = 3; break;
+                    case 8: invalid.physical_address++; break;
+                    case 9: invalid.virtual_address++; break;
                     }
                     if (!gem5_qemu_jit_set_reservation_state(hart, &invalid,
                                                             sizeof(invalid)) ||
@@ -954,17 +959,18 @@ reservation_smoke(int profile_test)
                 }
             } else if (invalidate == 1) {
                 gem5_qemu_jit_invalidate_translations(hart);
-            } else if (invalidate == 2) {
+            }
+            if (invalidate == 2 || invalidate == 4) {
                 unsigned other = hart ^ 1;
                 if (gem5_qemu_jit_set_gpr(other, 7, 768) ||
-                    gem5_qemu_jit_set_gpr(other, 8, 99)) {
+                    gem5_qemu_jit_set_gpr(other, 8, invalidate == 4 ? 17 : 99)) {
                     return -1;
                 }
                 gem5_qemu_jit_set_pc(other, 192);
                 gem5_qemu_jit_invalidate_translations(other);
                 if (gem5_qemu_jit_run(other, 1, &result) ||
                     result.reason != GEM5_QEMU_JIT_EXIT_BUDGET ||
-                    memory[768] != 99) {
+                    memory[768] != (invalidate == 4 ? 17 : 99)) {
                     return -1;
                 }
             }
@@ -974,7 +980,7 @@ reservation_smoke(int profile_test)
                 (gem5_qemu_jit_get_gpr(hart, 6) == 0) !=
                     (invalidate == 0 || invalidate == 3) ||
                 memory[768] != (invalidate == 2 ? 99 :
-                               invalidate == 1 ? 17 : 42)) {
+                               (invalidate == 1 || invalidate == 4) ? 17 : 42)) {
                 fprintf(stderr, "reservation hart %u invalidate=%u sc=%llu\n",
                         hart, invalidate,
                         (unsigned long long)gem5_qemu_jit_get_gpr(hart, 6));

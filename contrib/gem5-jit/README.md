@@ -110,25 +110,25 @@ VS/VU in profile mode), checks successful SC without interference, and checks
 failed SC after explicit invalidation or a different-value store by the other
 hart. This does not qualify all reservation-granule or eventual-progress rules.
 
-The version-1 reservation snapshot API exports/imports a stopped RV64 hart's
-backend-local virtual-address and expected-value token. Import validates all
+The version-2 reservation snapshot API exports/imports a stopped RV64 hart's
+virtual address, expected value, physical LR address, and access width (4/8).
+Version 1 is rejected because it lacks physical monitor identity. Import validates all
 fields before mutation; an invalid token must have zero payload fields. It
 does not access memory, raise interrupts, or perform a guest operation. Import
 must follow any translation invalidation and use the matching memory and
 translation snapshot. The smoke checks restoration after invalidation,
-explicit clearing, malformed-token rejection atomicity, and hart isolation.
-This is not a physical coherence monitor: access width, physical translation,
-same-value write invalidations, and O3 monitor reconstruction require further
-integration. Neither full JIT checkpoint restoration nor cross-model LR/SC
+explicit clearing, ten malformed-token rejection cases, hart isolation, and
+same-value peer writes after restoring a token. O3 monitor reconstruction
+requires further integration. Neither full JIT checkpoint restoration nor cross-model LR/SC
 preservation is established by the backend snapshot test.
 
 Physical monitor work in progress: embedded LR records its translated physical
 address and width; ordinary scalar stores, AMOs and successful SC operations
 notify matching 64-byte physical reservation blocks, including direct-mapped
 RAM writes. Non-embedded QEMU translation does not emit these hooks. This
-repairs the scalar same-value peer-store continuation probe, but physical
-metadata is not yet included in the version-1 migration token: cold restore
-of the peer-interference probe still fails. Vector, FP, helper, CMO and device
+repairs the scalar same-value peer-store continuation probe. Physical metadata
+is now included in the version-2 migration token for cold restoration.
+Vector, FP, helper, CMO and device
 write paths, physical SC-address revalidation, and alias tests remain open.
 
 Embedded S/VS timers use an external-timer hook instead of QEMU's ACLINT

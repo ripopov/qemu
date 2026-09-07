@@ -756,6 +756,8 @@ gem5_qemu_jit_get_reservation_state(uint32_t instance_id,
         state->valid = 1;
         state->virtual_address = env->load_res;
         state->expected_value = env->load_val;
+        state->physical_address = env->jit_load_paddr;
+        state->access_size = env->jit_load_size;
     }
     return 0;
 }
@@ -770,9 +772,14 @@ gem5_qemu_jit_set_reservation_state(uint32_t instance_id,
     if (!hart || hart->running || !state || size != sizeof(*state) ||
         riscv_cpu_mxl(&hart->riscv_cpu->env) != MXL_RV64 ||
         state->version != GEM5_QEMU_JIT_RESERVATION_STATE_VERSION ||
-        state->size != sizeof(*state) || state->reserved || state->valid > 1 ||
+        state->size != sizeof(*state) || state->reserved || state->reserved2 ||
+        state->valid > 1 ||
         (state->valid && state->virtual_address == UINT64_MAX) ||
-        (!state->valid && (state->virtual_address || state->expected_value))) {
+        (state->valid && state->access_size != 4 && state->access_size != 8) ||
+        (state->valid && ((state->physical_address | state->virtual_address) &
+                         (state->access_size - 1))) ||
+        (!state->valid && (state->virtual_address || state->expected_value ||
+                          state->physical_address || state->access_size))) {
         return -1;
     }
     /* Validate the entire token before changing either field. No guest CSR
@@ -780,6 +787,8 @@ gem5_qemu_jit_set_reservation_state(uint32_t instance_id,
     env = &hart->riscv_cpu->env;
     env->load_res = state->valid ? state->virtual_address : UINT64_MAX;
     env->load_val = state->valid ? state->expected_value : 0;
+    env->jit_load_paddr = state->physical_address;
+    env->jit_load_size = state->access_size;
     return 0;
 }
 
