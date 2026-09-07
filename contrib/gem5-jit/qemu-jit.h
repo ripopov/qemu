@@ -45,6 +45,18 @@ typedef struct Gem5QemuJitCallbacks {
     void *opaque;
 } Gem5QemuJitCallbacks;
 
+#define GEM5_QEMU_JIT_CONFIG_VERSION 1
+enum Gem5QemuJitProfile {
+    GEM5_QEMU_JIT_PROFILE_LEGACY = 0,
+    GEM5_QEMU_JIT_PROFILE_RVA23S64 = 1,
+};
+typedef struct Gem5QemuJitConfig {
+    uint32_t version;
+    uint32_t size;
+    uint32_t profile;
+    uint32_t vlenb;
+} Gem5QemuJitConfig;
+
 enum Gem5QemuJitExitReason {
     GEM5_QEMU_JIT_EXIT_BUDGET = 0,
     GEM5_QEMU_JIT_EXIT_HALTED = 1,
@@ -93,6 +105,12 @@ GEM5_QEMU_JIT_API int gem5_qemu_jit_set_vector_state(
  */
 GEM5_QEMU_JIT_API int gem5_qemu_jit_init(
     const Gem5QemuJitCallbacks *callbacks);
+/* First initialization fixes the process-wide profile/VLEN. Later harts
+ * must request identical configuration. RVA23 timers still need host event
+ * integration before use in gem5; profile selection alone is not handoff. */
+GEM5_QEMU_JIT_API int gem5_qemu_jit_init_config(
+    const Gem5QemuJitCallbacks *callbacks, const Gem5QemuJitConfig *config,
+    size_t size);
 GEM5_QEMU_JIT_API int gem5_qemu_jit_run(
     uint32_t instance_id, uint64_t max_instructions,
     Gem5QemuJitRunResult *result);

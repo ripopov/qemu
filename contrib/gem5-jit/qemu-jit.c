@@ -6,6 +6,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/bswap.h"
+#include "qapi/error.h"
 
 #include "qemu-jit.h"
 
@@ -43,6 +44,7 @@ typedef struct Gem5QemuJitState {
 } Gem5QemuJitState;
 
 static Gem5QemuJitState jit;
+static Gem5QemuJitConfig jit_config;
 
 /*
  * system/main.c owns this symbol in a normal QEMU executable. The embedded
@@ -217,7 +219,8 @@ jit_run_on_vcpu(CPUState *cpu, run_on_cpu_data data)
 }
 
 static int
-jit_global_init(const Gem5QemuJitCallbacks *callbacks)
+jit_global_init(const Gem5QemuJitCallbacks *callbacks,
+                const Gem5QemuJitConfig *config)
 {
     CPUState *cpu;
     const char *cpu_type;
@@ -227,6 +230,7 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks)
     uint8_t *host_address;
     int writable;
     size_t index;
+    char profile_cpu[64];
     char *argv[] = {
         (char *)"gem5-qemu-jit",
         (char *)"-machine", (char *)"none",
@@ -244,6 +248,11 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks)
         (char *)"-serial", (char *)"none",
     };
 
+    if (config->profile == GEM5_QEMU_JIT_PROFILE_RVA23S64) {
+        snprintf(profile_cpu, sizeof(profile_cpu), "rva23s64,vlen=%u",
+                 config->vlenb * 8);
+        argv[4] = profile_cpu;
+    }
     qemu_init(G_N_ELEMENTS(argv), argv);
 
     if (!first_cpu || CPU_NEXT(first_cpu)) {
@@ -251,7 +260,13 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks)
     }
     cpu_type = object_get_typename(OBJECT(first_cpu));
     for (index = 1; index < callbacks->instance_count; ++index) {
-        if (!cpu_create(cpu_type)) {
+        CPUState *next = CPU(object_new(cpu_type));
+        /* QEMU tracks implied-extension realization by hart ID. Assign a
+         * unique internal ID before realizing, not only afterwards. */
+        RISCV_CPU(next)->env.mhartid = index;
+        object_property_set_int(OBJECT(next), "vlen", config->vlenb * 8,
+                                &error_abort);
+        if (!qdev_realize(DEVICE(next), NULL, &error_abort)) {
             return -1;
         }
     }
@@ -269,6 +284,9 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks)
         hart = &jit.harts[cpu->cpu_index];
         hart->cpu = cpu;
         hart->riscv_cpu = RISCV_CPU(cpu);
+        if (hart->riscv_cpu->cfg.vlenb != config->vlenb) {
+            return -1;
+        }
         hart->riscv_cpu->env.mhartid = cpu->cpu_index;
         hart->riscv_cpu->env.rdtime_fn = jit_read_time;
         hart->riscv_cpu->env.rdtime_fn_arg = hart;
@@ -318,22 +336,45 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks)
     }
 
     jit.initialized = true;
+    jit_config = *config;
     return 0;
 }
 
 int
 gem5_qemu_jit_init(const Gem5QemuJitCallbacks *callbacks)
 {
+    const Gem5QemuJitConfig config = {
+        .version = GEM5_QEMU_JIT_CONFIG_VERSION,
+        .size = sizeof(config),
+        .profile = GEM5_QEMU_JIT_PROFILE_LEGACY,
+        .vlenb = 16,
+    };
+    return gem5_qemu_jit_init_config(callbacks, &config, sizeof(config));
+}
+
+int
+gem5_qemu_jit_init_config(const Gem5QemuJitCallbacks *callbacks,
+                         const Gem5QemuJitConfig *config, size_t size)
+{
     Gem5QemuJitHart *hart;
 
-    if (!callbacks ||
+    if (!config || size != sizeof(*config) ||
+        config->size != sizeof(*config) ||
+        config->version != GEM5_QEMU_JIT_CONFIG_VERSION ||
+        config->profile > GEM5_QEMU_JIT_PROFILE_RVA23S64 ||
+        config->vlenb < 16 || config->vlenb > GEM5_QEMU_JIT_MAX_VLENB ||
+        (config->vlenb & (config->vlenb - 1)) ||
+        (config->profile == GEM5_QEMU_JIT_PROFILE_LEGACY &&
+         config->vlenb != 16) ||
+        (jit.initialized && memcmp(config, &jit_config, sizeof(*config))) ||
+        !callbacks ||
         callbacks->instance_count == 0 ||
         callbacks->instance_id >= callbacks->instance_count ||
         !callbacks->memory_read || !callbacks->memory_write) {
         return -1;
     }
 
-    if (!jit.initialized && jit_global_init(callbacks) != 0) {
+    if (!jit.initialized && jit_global_init(callbacks, config) != 0) {
         return -1;
     }
     if (callbacks->instance_count != jit.hart_count) {

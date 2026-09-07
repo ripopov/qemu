@@ -34,6 +34,21 @@ register/control patterns and rejected malformed inputs. Vector execution,
 profile selection and gem5 consumption of this API are separate work; the
 default embedded CPU remains scalar.
 
+The version-1 configuration initializer can alternatively select QEMU's
+`rva23s64` CPU and VLENB=16/32/64/128. Profile and width are process-wide;
+mixed requests are rejected before registering another hart. The original
+initializer continues to select the unchanged legacy configuration. New
+harts receive unique internal IDs before realization because QEMU keys its
+implied-extension initialization by hart ID.
+
+`gem5-qemu-jit-smoke --rva23-vlenb 32` tests two configured harts, invalid
+and mixed configurations, dormant-state round trips, and vector execution
+after importing VSTART=3. The execution oracle checks preserved leading
+lanes, resumed VID, VSTART clearing, VADD and a vector store. The same test
+runs with VLENB 16, 64 and 128. This standalone profile path is not yet wired
+into gem5: full H/VS state transfer and gem5-owned SSTC deadlines remain
+required before full-profile CPU switching or Linux use is qualified.
+
 The shared library is a default build target whenever `riscv64-softmmu` is
 configured. A direct build can use:
 

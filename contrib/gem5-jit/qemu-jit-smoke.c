@@ -7,6 +7,7 @@
 #include "qemu-jit.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static uint8_t memory[4096];
@@ -119,8 +120,64 @@ vector_state_smoke(void)
     return 0;
 }
 
+static int
+vector_execution_smoke(void)
+{
+    /* vid.v v8; vadd.vi v9,v8,3; vse8.v v9,(x7) */
+    const uint32_t program[] = {0x5208a457, 0x0281b4d7, 0x020384a7};
+    Gem5QemuJitVectorState state;
+    Gem5QemuJitRunResult result;
+    uint64_t status;
+    unsigned hart, byte;
+
+    memcpy(memory + 64, program, sizeof(program));
+    for (hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_get_vector_state(hart, &state, sizeof(state)) ||
+            gem5_qemu_jit_get_csr(hart, 0x300, &status)) {
+            return -1;
+        }
+        state.vtype = 0; /* e8/m1, tail/mask undisturbed */
+        state.vill = 0;
+        state.vl = 8;
+        state.vstart = 3;
+        memset(state.registers[8], 0x55, state.vlenb);
+        if (gem5_qemu_jit_set_vector_state(hart, &state, sizeof(state)) ||
+            gem5_qemu_jit_set_csr(hart, 0x300, status | (1u << 9)) ||
+            gem5_qemu_jit_set_gpr(hart, 7, 512 + hart * 16)) {
+            return -1;
+        }
+        gem5_qemu_jit_set_pc(hart, 64);
+        gem5_qemu_jit_invalidate_translations(hart);
+        if (gem5_qemu_jit_run(hart, 1, &result) ||
+            result.reason != GEM5_QEMU_JIT_EXIT_BUDGET ||
+            result.instructions != 1 || gem5_qemu_jit_get_pc(hart) != 68 ||
+            gem5_qemu_jit_get_vector_state(hart, &state, sizeof(state)) ||
+            state.vstart != 0) {
+            return -1;
+        }
+        for (byte = 0; byte < 8; byte++) {
+            if (state.registers[8][byte] != (byte < 3 ? 0x55 : byte)) {
+                return -1;
+            }
+        }
+        if (gem5_qemu_jit_run(hart, 2, &result) ||
+            result.reason != GEM5_QEMU_JIT_EXIT_BUDGET ||
+            result.instructions != 2 || gem5_qemu_jit_get_pc(hart) != 76) {
+            return -1;
+        }
+        for (byte = 0; byte < 8; byte++) {
+            if (memory[512 + hart * 16 + byte] !=
+                (byte < 3 ? 0x58 : byte + 3)) {
+                return -1;
+            }
+        }
+    }
+    puts("RVA23 vector execution from imported VSTART state passed");
+    return 0;
+}
+
 int
-main(void)
+main(int argc, char **argv)
 {
     /* addi x1,x0,5; addi x2,x1,7; csrr x3,mhartid; sw x2,256(x0) */
     const uint32_t program[] = {
@@ -146,6 +203,47 @@ main(void)
     };
     Gem5QemuJitRunResult results[2];
     unsigned instance;
+    Gem5QemuJitConfig config = {
+        .version = GEM5_QEMU_JIT_CONFIG_VERSION,
+        .size = sizeof(config),
+        .profile = GEM5_QEMU_JIT_PROFILE_RVA23S64,
+        .vlenb = 32,
+    };
+    const int profile_test = argc == 3 && !strcmp(argv[1], "--rva23-vlenb");
+    if (argc != 1 && !profile_test) {
+        fprintf(stderr, "usage: %s [--rva23-vlenb N]\n", argv[0]);
+        return 1;
+    }
+    if (profile_test) {
+        char *end;
+        unsigned long vlenb = strtoul(argv[2], &end, 0);
+        if (!*argv[2] || *end || vlenb > GEM5_QEMU_JIT_MAX_VLENB) {
+            return 1;
+        }
+        config.vlenb = vlenb;
+    }
+    /* Rejected configuration must not initialize or poison QEMU. */
+    for (unsigned test = 0; test < 8; test++) {
+        Gem5QemuJitConfig bad = config;
+        size_t size = sizeof(bad);
+        switch (test) {
+        case 0: bad.version++; break;
+        case 1: bad.size--; break;
+        case 2: bad.profile = 2; break;
+        case 3: bad.vlenb = 24; break;
+        case 4: bad.vlenb = 8; break;
+        case 5: bad.vlenb = 256; break;
+        case 6: bad.profile = 0; bad.vlenb = 32; break;
+        case 7: size--; break;
+        }
+        if (gem5_qemu_jit_init_config(&callbacks[0], &bad, size) == 0) {
+            fprintf(stderr, "invalid configuration accepted\n");
+            return 1;
+        }
+    }
+    if (gem5_qemu_jit_init_config(&callbacks[0], NULL, sizeof(config)) == 0) {
+        return 1;
+    }
 
     memcpy(memory, program, sizeof(program));
     for (instance = 0; instance < 2; ++instance) {
@@ -153,7 +251,23 @@ main(void)
         const uint64_t fflags = 1u << instance;
         const uint64_t frm = instance + 1;
 
-        if (gem5_qemu_jit_init(&callbacks[instance]) != 0) {
+        if (instance == 1) {
+            Gem5QemuJitConfig mismatch = config;
+            mismatch.vlenb = config.vlenb == 16 ? 32 : 16;
+            if (gem5_qemu_jit_init_config(&callbacks[instance], &mismatch,
+                                            sizeof(mismatch)) == 0) {
+                fprintf(stderr, "mixed hart configuration accepted\n");
+                return 1;
+            }
+            if (profile_test && gem5_qemu_jit_init(&callbacks[instance]) == 0) {
+                fprintf(stderr, "mixed legacy/profile configuration accepted\n");
+                return 1;
+            }
+        }
+
+        if ((profile_test ? gem5_qemu_jit_init_config(&callbacks[instance],
+                              &config, sizeof(config)) :
+                            gem5_qemu_jit_init(&callbacks[instance])) != 0) {
             fprintf(stderr, "adapter instance %u initialization failed\n",
                     instance);
             return 1;
@@ -163,10 +277,23 @@ main(void)
          * the event queue and CLINT interrupts. The embedded CPU must not
          * advertise an unsynchronized internal timer implementation.
          */
-        if (gem5_qemu_jit_get_csr(instance, 0x14d, &value) == 0) {
+        if (!profile_test &&
+            gem5_qemu_jit_get_csr(instance, 0x14d, &value) == 0) {
             fprintf(stderr, "adapter instance %u unexpectedly exposes sstc\n",
                     instance);
             return 1;
+        }
+        if (profile_test) {
+            Gem5QemuJitVectorState state;
+            const uint64_t vh = (1u << 21) | (1u << 7);
+            if (gem5_qemu_jit_get_csr(instance, 0x301, &value) ||
+                (value & vh) != vh ||
+                gem5_qemu_jit_get_vector_state(instance, &state,
+                                                sizeof(state)) ||
+                state.vlenb != config.vlenb) {
+                fprintf(stderr, "profile or VLEN mismatch\n");
+                return 1;
+            }
         }
         /*
          * CPU takeover must preserve FP control state even while mstatus.FS
@@ -269,6 +396,10 @@ main(void)
         }
     }
 
+    if (profile_test && vector_execution_smoke()) {
+        fprintf(stderr, "RVA23 vector execution smoke failed\n");
+        return 1;
+    }
     puts("gem5 QEMU JIT two-hart smoke test passed");
     return 0;
 }
