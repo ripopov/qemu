@@ -7,6 +7,7 @@
 #include "qemu-jit.h"
 
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
@@ -274,6 +275,36 @@ counter_restore_smoke(void)
             gem5_qemu_jit_set_csr(hart, 0xb02, saved) ||
             gem5_qemu_jit_set_csr(hart, 0x320, inhibit)) {
             return -1;
+        }
+    }
+    return 0;
+}
+
+static int
+user_xlen_smoke(bool profile)
+{
+    const unsigned csrs[] = {0x300, 0x100, 0x200};
+    const uint64_t mask = UINT64_C(3) << 32;
+    const uint64_t rv64 = UINT64_C(2) << 32;
+
+    for (unsigned hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_set_mode(hart, 3, 0)) {
+            return -1;
+        }
+        for (unsigned i = 0; i < (profile ? 3 : 2); i++) {
+            uint64_t saved, observed;
+            if (gem5_qemu_jit_get_csr(hart, csrs[i], &saved) ||
+                (saved & mask) != rv64) {
+                return -1;
+            }
+            for (unsigned pattern = 0; pattern < 4; pattern++) {
+                uint64_t value = (saved & ~mask) | ((uint64_t)pattern << 32);
+                if (gem5_qemu_jit_set_csr(hart, csrs[i], value) ||
+                    gem5_qemu_jit_get_csr(hart, csrs[i], &observed) ||
+                    observed != saved) {
+                    return -1;
+                }
+            }
         }
     }
     return 0;
@@ -1310,6 +1341,10 @@ main(int argc, char **argv)
     }
     if (counter_restore_smoke()) {
         fprintf(stderr, "host counter restoration failed\n");
+        return 1;
+    }
+    if (user_xlen_smoke(profile_test)) {
+        fprintf(stderr, "embedded RV64 user-width smoke failed\n");
         return 1;
     }
     if (profile_test && mstatus_restore_smoke()) {

@@ -93,7 +93,14 @@ status fields, retaining WARL legalization. Call it only with M mode and V=0;
 invalid versions, modes, harts, or H-only state without H are rejected before
 mutation. A changed trap field invalidates the local software TLB. The smoke
 checks all four MPV/GVA patterns on both harts, rejected versions and modes,
-and that guest CSR accessors still cannot overwrite those trap fields.
+and ordinary guest CSR writes of those trap fields, needed for nested M-mode
+trap-frame restoration.
+
+The embedded RV64 backend fixes UXL to 64 bits in both MSTATUS/SSTATUS and
+VSSTATUS, matching gem5's U/VU execution widths. Optional RV32 user execution
+is not exposed: allowing it only inside QEMU would lose state at batch and
+CPU-switch boundaries. This uses the existing gem5 embedding flag and does
+not change standalone QEMU's WARL choices.
 
 Changing V swaps QEMU's HS/VS banks before updating execution flags, following
 its debugger restore path. It does not emulate trap entry or xRET. Invalid

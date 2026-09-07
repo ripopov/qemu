@@ -2124,6 +2124,14 @@ static uint64_t riscv_write_uxl(CPURISCVState *env, uint64_t val,
     RISCVMXL xl = riscv_cpu_mxl(env);
     uint64_t uxl = get_field(val, field);
 
+    /* The embedded gem5 backend shares a fixed RV64 U/VU contract with O3.
+     * Allowing UXL=32 here would lose that state at a batch or CPU boundary.
+     * Keep ordinary QEMU's optional narrower user mode unchanged.
+     */
+    if (riscv_gem5_jit_enabled) {
+        return set_field(val, field, xl);
+    }
+
     if (uxl == MXL_RV128) {
         uxl = xl == MXL_RV128 ? MXL_RV64 : xl;
         val = set_field(val, field, uxl);
