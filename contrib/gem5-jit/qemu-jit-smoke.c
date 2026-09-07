@@ -176,6 +176,82 @@ vector_execution_smoke(void)
     return 0;
 }
 
+static int
+virtual_mode_smoke(void)
+{
+    const unsigned host[] = {0x105, 0x140, 0x141, 0x142, 0x143, 0x180, 0x100};
+    const unsigned guest[] = {0x205, 0x240, 0x241, 0x242, 0x243, 0x280, 0x200};
+    uint64_t saved_host[7], saved_guest[7], hs[7], vs[7], updated[7], value;
+    unsigned hart, i, privilege, virt;
+
+    for (hart = 0; hart < 2; hart++) {
+        for (i = 0; i < 7; i++) {
+            hs[i] = i == 5 ? (UINT64_C(8) << 60) | 0x10 :
+                            0x100 + hart * 64 + i * 4;
+            vs[i] = i == 5 ? (UINT64_C(8) << 60) | 0x20 :
+                            0x200 + hart * 64 + i * 4;
+            if (i == 6) {
+                hs[i] = (UINT64_C(2) << 32) | (1u << 18); /* UXL/SUM */
+                vs[i] = (UINT64_C(2) << 32) | (1u << 19); /* UXL/MXR */
+            }
+            updated[i] = i == 6 ? vs[i] | 2 : vs[i] + 0x40;
+            if (gem5_qemu_jit_get_csr(hart, host[i], &saved_host[i]) ||
+                gem5_qemu_jit_get_csr(hart, guest[i], &saved_guest[i]) ||
+                gem5_qemu_jit_set_csr(hart, host[i], hs[i]) ||
+                gem5_qemu_jit_set_csr(hart, guest[i], vs[i])) {
+                return -1;
+            }
+        }
+        if (gem5_qemu_jit_set_mode(hart, 1, 1) ||
+            gem5_qemu_jit_get_mode(hart, &privilege, &virt) ||
+            privilege != 1 || virt != 1) {
+            return -1;
+        }
+        for (i = 0; i < 7; i++) {
+            if (gem5_qemu_jit_get_csr(hart, host[i], &value) ||
+                value != vs[i] ||
+                gem5_qemu_jit_set_csr(hart, host[i], updated[i])) {
+                return -1;
+            }
+        }
+        if (gem5_qemu_jit_set_mode(hart, 0, 1) ||
+            gem5_qemu_jit_get_mode(hart, &privilege, &virt) ||
+            privilege != 0 || virt != 1 ||
+            gem5_qemu_jit_set_mode(hart, 3, 1) == 0 ||
+            gem5_qemu_jit_set_mode(hart, 1, 2) == 0 ||
+            gem5_qemu_jit_set_priv(hart, 2) == 0 ||
+            gem5_qemu_jit_get_mode(hart, &privilege, &virt) ||
+            privilege != 0 || virt != 1 ||
+            gem5_qemu_jit_set_mode(hart, 1, 1)) {
+            return -1;
+        }
+        for (i = 0; i < 7; i++) {
+            if (gem5_qemu_jit_get_csr(hart, host[i], &value) ||
+                value != updated[i]) {
+                return -1;
+            }
+        }
+        /* Legacy M-mode borrowing must bank correctly too. */
+        if (gem5_qemu_jit_set_priv(hart, 3) ||
+            gem5_qemu_jit_get_mode(hart, &privilege, &virt) ||
+            privilege != 3 || virt != 0) {
+            return -1;
+        }
+        for (i = 0; i < 7; i++) {
+            if (gem5_qemu_jit_get_csr(hart, host[i], &value) || value != hs[i] ||
+                gem5_qemu_jit_get_csr(hart, guest[i], &value) ||
+                value != updated[i] ||
+                gem5_qemu_jit_set_csr(hart, host[i], saved_host[i]) ||
+                gem5_qemu_jit_set_csr(hart, guest[i], saved_guest[i])) {
+                return -1;
+            }
+        }
+        gem5_qemu_jit_invalidate_translations(hart);
+    }
+    puts("virtual mode: HS/VS banks and VU transitions passed");
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -320,6 +396,13 @@ main(int argc, char **argv)
 
     if (vector_state_smoke()) {
         fprintf(stderr, "vector migration state smoke failed\n");
+        return 1;
+    }
+    if ((profile_test && virtual_mode_smoke()) ||
+        (!profile_test && gem5_qemu_jit_set_mode(0, 1, 1) == 0) ||
+        gem5_qemu_jit_set_priv(0, 2) == 0 ||
+        gem5_qemu_jit_set_mode(2, 3, 0) == 0) {
+        fprintf(stderr, "virtual mode smoke failed\n");
         return 1;
     }
 

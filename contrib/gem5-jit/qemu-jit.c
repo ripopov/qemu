@@ -488,12 +488,44 @@ gem5_qemu_jit_get_priv(uint32_t instance_id)
 int
 gem5_qemu_jit_set_priv(uint32_t instance_id, unsigned value)
 {
+    return gem5_qemu_jit_set_mode(instance_id, value, 0);
+}
+
+int
+gem5_qemu_jit_get_mode(uint32_t instance_id, unsigned *privilege,
+                      unsigned *virtualization)
+{
     Gem5QemuJitHart *hart = jit_hart(instance_id);
 
-    if (!hart || value > PRV_M) {
+    if (!hart || !privilege || !virtualization) {
         return -1;
     }
-    riscv_cpu_set_mode(&hart->riscv_cpu->env, value, false);
+    *privilege = hart->riscv_cpu->env.priv;
+    *virtualization = hart->riscv_cpu->env.virt_enabled;
+    return 0;
+}
+
+int
+gem5_qemu_jit_set_mode(uint32_t instance_id, unsigned privilege,
+                      unsigned virtualization)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    CPURISCVState *env;
+
+    if (!hart || privilege > PRV_M || privilege == PRV_RESERVED ||
+        virtualization > 1 || (virtualization && privilege == PRV_M)) {
+        return -1;
+    }
+    env = &hart->riscv_cpu->env;
+    if (virtualization && !riscv_has_ext(env, RVH)) {
+        return -1;
+    }
+    /* Like QEMU's debugger restore path, move banked registers before
+     * changing V. set_mode alone changes execution flags, not the banks. */
+    if (env->virt_enabled != virtualization) {
+        riscv_cpu_swap_hypervisor_regs(env);
+    }
+    riscv_cpu_set_mode(env, privilege, virtualization);
     return 0;
 }
 

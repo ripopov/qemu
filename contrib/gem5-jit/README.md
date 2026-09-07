@@ -49,6 +49,15 @@ runs with VLENB 16, 64 and 128. This standalone profile path is not yet wired
 into gem5: full H/VS state transfer and gem5-owned SSTC deadlines remain
 required before full-profile CPU switching or Linux use is qualified.
 
+The mode migration API explicitly reads/writes privilege and virtualization.
+Changing V swaps QEMU's HS/VS banks before updating execution flags, following
+its debugger restore path. It does not emulate trap entry or xRET. Invalid
+privilege 2, nonboolean V, virtual M mode, missing H, and invalid hart IDs
+are rejected before state changes. Legacy `set_priv` selects V=0 through
+this same path. The profile smoke tests S/VS status, trap vector, scratch,
+EPC, cause, trap value and SATP banks, guest updates across VS/VU transitions,
+and legacy M-mode borrowing; invalid requests must preserve the active mode.
+
 The shared library is a default build target whenever `riscv64-softmmu` is
 configured. A direct build can use:
 
