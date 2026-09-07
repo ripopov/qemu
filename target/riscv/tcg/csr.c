@@ -4840,8 +4840,9 @@ static RISCVException rmw_hvip64(CPURISCVState *env, int csrno,
      *  maintain all bits there). nalias_mask denotes bits that come from
      *  hvip.
      */
-    uint64_t alias_mask = (env->hideleg | ~env->hvien) | VS_MODE_INTERRUPTS;
-    uint64_t nalias_mask = (~env->hideleg & env->hvien);
+    uint64_t alias_mask = ((env->hideleg | ~env->hvien) | VS_MODE_INTERRUPTS) &
+                          hvip_writable_mask;
+    uint64_t nalias_mask = (~env->hideleg & env->hvien) & hvip_writable_mask;
     uint64_t wr_mask_hvip;
     uint64_t wr_mask_mip;
 

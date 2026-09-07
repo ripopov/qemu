@@ -279,6 +279,13 @@ timer_smoke(void)
                 return -1;
             }
         }
+        /* Non-virtual M/S pending bits must not read back as HVIP. */
+        gem5_qemu_jit_set_mip(hart, mip | 0xaaa);
+        if (gem5_qemu_jit_get_csr(hart, 0x645, &value) || (value & 0xaaa)) {
+            fprintf(stderr, "HVIP leaked physical pending bits on hart %u\n", hart);
+            return -1;
+        }
+        gem5_qemu_jit_set_mip(hart, mip);
         host_time[hart] = 10;
         if (gem5_qemu_jit_set_csr(hart, 0x14d, 20) ||
             gem5_qemu_jit_set_csr(hart, 0x24d, 25) ||
