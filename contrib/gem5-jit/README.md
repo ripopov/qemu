@@ -50,6 +50,14 @@ into gem5: full H/VS state transfer and gem5-owned SSTC deadlines remain
 required before full-profile CPU switching or Linux use is qualified.
 
 The mode migration API explicitly reads/writes privilege and virtualization.
+Version-1 `restore_mstatus` is a trusted host operation, separate from guest
+CSR writes. It restores MPV/GVA trap fields as well as normally writable
+status fields, retaining WARL legalization. Call it only with M mode and V=0;
+invalid versions, modes, harts, or H-only state without H are rejected before
+mutation. A changed trap field invalidates the local software TLB. The smoke
+checks all four MPV/GVA patterns on both harts, rejected versions and modes,
+and that guest CSR accessors still cannot overwrite those trap fields.
+
 Changing V swaps QEMU's HS/VS banks before updating execution flags, following
 its debugger restore path. It does not emulate trap entry or xRET. Invalid
 privilege 2, nonboolean V, virtual M mode, missing H, and invalid hart IDs

@@ -54,6 +54,47 @@ memory_map(void *opaque, size_t index, uint64_t *guest_address, uint64_t *size,
 }
 
 static int
+mstatus_restore_smoke(void)
+{
+    const uint64_t mask = UINT64_C(3) << 38; /* GVA, MPV */
+    uint64_t saved[2], observed;
+
+    for (unsigned hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_set_mode(hart, 3, 0) ||
+            gem5_qemu_jit_get_csr(hart, 0x300, &saved[hart])) {
+            return -1;
+        }
+    }
+    for (unsigned pattern = 0; pattern < 4; pattern++) {
+        for (unsigned hart = 0; hart < 2; hart++) {
+            uint64_t expected = (saved[hart] & ~mask) |
+                ((uint64_t)(pattern ^ hart) << 38);
+            if (gem5_qemu_jit_restore_mstatus(hart, 1, expected) ||
+                gem5_qemu_jit_get_csr(hart, 0x300, &observed) ||
+                observed != expected ||
+                gem5_qemu_jit_restore_mstatus(hart, 2, expected ^ mask) == 0 ||
+                gem5_qemu_jit_get_csr(hart, 0x300, &observed) ||
+                observed != expected ||
+                /* Guest accessors must still leave trap fields unchanged. */
+                gem5_qemu_jit_set_csr(hart, 0x300, expected ^ mask) ||
+                gem5_qemu_jit_get_csr(hart, 0x300, &observed) ||
+                observed != expected) {
+                return -1;
+            }
+        }
+    }
+    for (unsigned hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_set_mode(hart, 1, 1) ||
+            gem5_qemu_jit_restore_mstatus(hart, 1, saved[hart]) == 0 ||
+            gem5_qemu_jit_set_mode(hart, 3, 0) ||
+            gem5_qemu_jit_restore_mstatus(hart, 1, saved[hart])) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int
 vector_state_smoke(void)
 {
     Gem5QemuJitVectorState saved[2], expected[2], observed, bad;
@@ -744,6 +785,10 @@ main(int argc, char **argv)
         }
     }
 
+    if (profile_test && mstatus_restore_smoke()) {
+        fprintf(stderr, "machine status restoration failed\n");
+        return 1;
+    }
     if (vector_state_smoke()) {
         fprintf(stderr, "vector migration state smoke failed\n");
         return 1;

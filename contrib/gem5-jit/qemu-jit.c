@@ -790,6 +790,35 @@ gem5_qemu_jit_set_csr(uint32_t instance_id, unsigned csr, uint64_t value)
         RISCV_EXCP_NONE ? 0 : -1;
 }
 
+int
+gem5_qemu_jit_restore_mstatus(uint32_t instance_id, unsigned version,
+                              uint64_t value)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    CPURISCVState *env;
+    const uint64_t trap_mask = MSTATUS_MPV | MSTATUS_GVA;
+    uint64_t old;
+
+    if (!hart || version != GEM5_QEMU_JIT_MSTATUS_RESTORE_VERSION) {
+        return -1;
+    }
+    env = &hart->riscv_cpu->env;
+    if (env->priv != PRV_M || env->virt_enabled ||
+        (!riscv_has_ext(env, RVH) && (value & trap_mask))) {
+        return -1;
+    }
+    old = env->mstatus;
+    if (gem5_qemu_jit_set_csr(instance_id, CSR_MSTATUS, value)) {
+        return -1;
+    }
+    /* Guest writes intentionally cannot restore these hardware trap fields. */
+    env->mstatus = (env->mstatus & ~trap_mask) | (value & trap_mask);
+    if ((old ^ env->mstatus) & trap_mask) {
+        tlb_flush(hart->cpu);
+    }
+    return 0;
+}
+
 uint64_t
 gem5_qemu_jit_get_mip(uint32_t instance_id)
 {

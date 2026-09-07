@@ -180,6 +180,12 @@ GEM5_QEMU_JIT_API int gem5_qemu_jit_get_csr(
     uint32_t instance_id, unsigned csr, uint64_t *value);
 GEM5_QEMU_JIT_API int gem5_qemu_jit_set_csr(
     uint32_t instance_id, unsigned csr, uint64_t value);
+#define GEM5_QEMU_JIT_MSTATUS_RESTORE_VERSION 1
+/* Trusted host restoration, only in M mode with V=0. Applies normal WARL
+ * legalization plus exact restoration of MPV/GVA trap state. Does not change
+ * the guest CSR-write policy. Rejects unsupported versions before mutation. */
+GEM5_QEMU_JIT_API int gem5_qemu_jit_restore_mstatus(
+    uint32_t instance_id, unsigned version, uint64_t value);
 GEM5_QEMU_JIT_API uint64_t gem5_qemu_jit_get_mip(uint32_t instance_id);
 GEM5_QEMU_JIT_API void gem5_qemu_jit_set_mip(
     uint32_t instance_id, uint64_t value);
