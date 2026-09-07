@@ -84,6 +84,7 @@ static bool trans_fsh(DisasContext *ctx, arg_fsh *a)
     }
 
     tcg_gen_qemu_st_i64(cpu_fpr[a->rs2], t0, ctx->mem_idx, memop);
+    gen_jit_store_notify(ctx, t0, memop);
 
     return true;
 }

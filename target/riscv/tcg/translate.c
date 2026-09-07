@@ -1143,6 +1143,18 @@ static bool gen_unary_per_ol(DisasContext *ctx, arg_r2 *a, DisasExtend ext,
     return gen_unary(ctx, a, ext, f_tl);
 }
 
+/* Shared post-store hook for embedded physical reservation monitors. Keep
+ * notification after the store so a faulting operation does not invalidate
+ * another hart's reservation. Standard QEMU emits no extra helper. */
+static void gen_jit_store_notify(DisasContext *ctx, TCGv address, MemOp mop)
+{
+    if (riscv_gem5_jit_enabled) {
+        gen_helper_jit_store_notify(tcg_env, address,
+                                   tcg_constant_i32(memop_size(mop)),
+                                   tcg_constant_i32(ctx->mem_idx));
+    }
+}
+
 static bool gen_amo(DisasContext *ctx, arg_atomic *a,
                     void(*func)(TCGv, TCGv, TCGv, TCGArg, MemOp),
                     MemOp mop)
@@ -1161,11 +1173,7 @@ static bool gen_amo(DisasContext *ctx, arg_atomic *a,
     decode_save_opc(ctx, RISCV_UW2_ALWAYS_STORE_AMO);
     src1 = get_address(ctx, a->rs1, 0);
     func(dest, src1, src2, ctx->mem_idx, mop);
-    if (riscv_gem5_jit_enabled) {
-        gen_helper_jit_store_notify(tcg_env, src1,
-                                   tcg_constant_i32(memop_size(mop)),
-                                   tcg_constant_i32(ctx->mem_idx));
-    }
+    gen_jit_store_notify(ctx, src1, mop);
 
     gen_set_gpr(ctx, a->rd, dest);
     return true;

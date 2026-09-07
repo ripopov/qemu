@@ -128,7 +128,11 @@ notify matching 64-byte physical reservation blocks, including direct-mapped
 RAM writes. Non-embedded QEMU translation does not emit these hooks. This
 repairs the scalar same-value peer-store continuation probe. Physical metadata
 is now included in the version-2 migration token for cold restoration.
-Vector, FP, helper, CMO and device
+FSH/FSW/FSD (and compressed stores delegating to these translators) use the
+same post-store notification generator as scalar stores and AMOs. Directed
+same-value peer FP stores pass JIT/O3 checkpoint continuation and cold restore
+for 16/32/64-bit widths; this does not establish all alias/fault cases.
+Vector, helper, CMO and device
 write paths, physical SC-address revalidation, and alias tests remain open.
 
 Embedded S/VS timers use an external-timer hook instead of QEMU's ACLINT

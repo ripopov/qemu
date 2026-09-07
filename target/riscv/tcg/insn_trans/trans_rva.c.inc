@@ -88,9 +88,7 @@ static bool gen_sc(DisasContext *ctx, arg_atomic *a, MemOp mop)
     if (riscv_gem5_jit_enabled) {
         TCGLabel *no_store = gen_new_label();
         tcg_gen_brcondi_tl(TCG_COND_NE, dest, 0, no_store);
-        gen_helper_jit_store_notify(tcg_env, src1,
-                                   tcg_constant_i32(memop_size(mop)),
-                                   tcg_constant_i32(ctx->mem_idx));
+        gen_jit_store_notify(ctx, src1, mop);
         gen_set_label(no_store);
     }
     gen_set_gpr(ctx, a->rd, dest);

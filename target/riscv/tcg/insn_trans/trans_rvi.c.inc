@@ -486,11 +486,7 @@ static bool gen_store_tl(DisasContext *ctx, arg_sb *a, MemOp memop)
     }
 
     tcg_gen_qemu_st_tl(data, addr, ctx->mem_idx, memop);
-    if (riscv_gem5_jit_enabled) {
-        gen_helper_jit_store_notify(tcg_env, addr,
-                                   tcg_constant_i32(memop_size(memop)),
-                                   tcg_constant_i32(ctx->mem_idx));
-    }
+    gen_jit_store_notify(ctx, addr, memop);
     return true;
 }
 

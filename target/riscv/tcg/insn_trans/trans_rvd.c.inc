@@ -90,6 +90,7 @@ static bool trans_fsd(DisasContext *ctx, arg_fsd *a)
     decode_save_opc(ctx, 0);
     addr = get_address(ctx, a->rs1, a->imm);
     tcg_gen_qemu_st_i64(cpu_fpr[a->rs2], addr, ctx->mem_idx, memop);
+    gen_jit_store_notify(ctx, addr, memop);
     return true;
 }
 
