@@ -963,12 +963,6 @@ gem5_qemu_jit_set_hpm_state(uint32_t instance_id,
             (state->counter[i] || state->event[i])) {
             return -1;
         }
-        uint64_t selector = state->event[i] & MHPMEVENT_IDX_MASK;
-        for (unsigned j = 3; selector && j < i; j++) {
-            if ((state->event[j] & MHPMEVENT_IDX_MASK) == selector) {
-                return -1;
-            }
-        }
     }
     if (cpu->pmu_timer) {
         timer_del(cpu->pmu_timer);

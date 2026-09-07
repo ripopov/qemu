@@ -73,7 +73,7 @@ hpm_transfer_smoke(void)
                 state[hart].counter[i] = UINT64_C(0x1234567800000000) +
                     hart * 256 + i;
                 state[hart].event[i] = (UINT64_C(1) << 63) |
-                    ((uint64_t)(i & 31) << 58);
+                    ((uint64_t)(i & 31) << 58) | 2;
             }
         }
         if (gem5_qemu_jit_set_hpm_state(hart, &state[hart], sizeof(state[hart]))) {
@@ -94,7 +94,7 @@ hpm_transfer_smoke(void)
             case 2: bad.implemented ^= 8; break;
             case 3: bad.counter[1] = 1; break;
             case 4: bad.inhibited |= 1; break;
-            case 5: bad.event[3] = bad.event[4] = 2; break;
+            case 5: bad.event[1] = 2; break;
             }
             if (!gem5_qemu_jit_set_hpm_state(hart, &bad, sizeof(bad)) ||
                 gem5_qemu_jit_get_hpm_state(hart, &observed, sizeof(observed)) ||
@@ -190,12 +190,14 @@ counter_isolation_smoke(void)
         fixed[hart].cycle = 1000 + hart;
         fixed[hart].instret = 2000 + hart;
         hpm[hart] = saved_hpm[hart];
-        hpm[hart].inhibited = hpm[hart].implemented & ~UINT32_C(8);
+        hpm[hart].inhibited = hpm[hart].implemented & ~UINT32_C(24);
         memset(hpm[hart].counter, 0, sizeof(hpm[hart].counter));
         memset(hpm[hart].event, 0, sizeof(hpm[hart].event));
         hpm[hart].counter[3] = hart ? UINT64_MAX - 7 : 3000;
+        hpm[hart].counter[4] = hart ? UINT64_MAX - 23 : 4000;
         /* Hart 1 uses a noncurrent-mode filter to exercise mode snapshots. */
         hpm[hart].event[3] = 2 | (hart ? UINT64_C(1) << 61 : 0);
+        hpm[hart].event[4] = 2;
         if (gem5_qemu_jit_set_fixed_counters(hart, &fixed[hart], sizeof(fixed[hart])) ||
             gem5_qemu_jit_set_hpm_state(hart, &hpm[hart], sizeof(hpm[hart]))) {
             return -1;
@@ -231,7 +233,9 @@ counter_isolation_smoke(void)
                 observed_fixed.cycle != fixed[hart].cycle + executed[hart] ||
                 observed_fixed.instret != fixed[hart].instret + executed[hart] ||
                 observed_hpm.counter[3] != hpm[hart].counter[3] + executed[hart] ||
+                observed_hpm.counter[4] != hpm[hart].counter[4] + executed[hart] ||
                 !!(observed_hpm.event[3] >> 63) != (hart && executed[hart] >= 8) ||
+                !!(observed_hpm.event[4] >> 63) != (hart && executed[hart] >= 24) ||
                 !!(gem5_qemu_jit_get_mip(hart) & (UINT64_C(1) << 13)) !=
                     (hart && executed[hart] >= 8)) {
                 fprintf(stderr, "counter isolation failed: round %u hart %u\n", round, hart);

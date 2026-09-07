@@ -185,25 +185,12 @@ void riscv_pmu_update_fixed_ctrs(CPURISCVState *env,
     riscv_pmu_icount_update_priv(env, newpriv, new_virt);
 }
 
-int riscv_pmu_incr_ctr(RISCVCPU *cpu, enum riscv_pmu_event_idx event_idx)
+static int pmu_incr_counter(RISCVCPU *cpu, uint32_t ctr_idx)
 {
-    uint32_t ctr_idx;
     CPURISCVState *env = &cpu->env;
     uint64_t max_val = UINT64_MAX;
     bool virt_on = env->virt_enabled;
     PMUCTRState *counter;
-    gpointer value;
-
-    if (!cpu->cfg.pmu_mask) {
-        return 0;
-    }
-    value = g_hash_table_lookup(cpu->pmu_event_ctr_map,
-                                GUINT_TO_POINTER(event_idx));
-    if (!value) {
-        return -1;
-    }
-
-    ctr_idx = GPOINTER_TO_UINT(value);
     if (!riscv_pmu_counter_enabled(cpu, ctr_idx)) {
         return -1;
     }
@@ -238,65 +225,52 @@ int riscv_pmu_incr_ctr(RISCVCPU *cpu, enum riscv_pmu_event_idx event_idx)
     return 0;
 }
 
+/* Map counter -> event: selectors belong to counters, and any number of
+ * counters may independently subscribe to the same event. */
+static bool pmu_counter_matches(RISCVCPU *cpu, uint32_t ctr_idx,
+                                uint32_t event_idx)
+{
+    return cpu->pmu_event_ctr_map &&
+        GPOINTER_TO_UINT(g_hash_table_lookup(cpu->pmu_event_ctr_map,
+                            GUINT_TO_POINTER(ctr_idx))) == event_idx;
+}
+
+int riscv_pmu_incr_ctr(RISCVCPU *cpu, enum riscv_pmu_event_idx event_idx)
+{
+    if (!cpu->cfg.pmu_mask) {
+        return 0;
+    }
+    for (unsigned i = 3; i < 32; i++) {
+        if (pmu_counter_matches(cpu, i, event_idx)) {
+            pmu_incr_counter(cpu, i);
+        }
+    }
+    return 0;
+}
+
 bool riscv_pmu_ctr_monitor_instructions(CPURISCVState *env,
                                         uint32_t target_ctr)
 {
-    RISCVCPU *cpu;
-    uint32_t event_idx;
-    uint32_t ctr_idx;
 
     /* Fixed instret counter */
     if (target_ctr == 2) {
         return true;
     }
 
-    cpu = env_archcpu(env);
-    if (!cpu->pmu_event_ctr_map) {
-        return false;
-    }
-
-    event_idx = RISCV_PMU_EVENT_HW_INSTRUCTIONS;
-    ctr_idx = GPOINTER_TO_UINT(g_hash_table_lookup(cpu->pmu_event_ctr_map,
-                               GUINT_TO_POINTER(event_idx)));
-    if (!ctr_idx) {
-        return false;
-    }
-
-    return target_ctr == ctr_idx ? true : false;
+    return pmu_counter_matches(env_archcpu(env), target_ctr,
+                               RISCV_PMU_EVENT_HW_INSTRUCTIONS);
 }
 
 bool riscv_pmu_ctr_monitor_cycles(CPURISCVState *env, uint32_t target_ctr)
 {
-    RISCVCPU *cpu;
-    uint32_t event_idx;
-    uint32_t ctr_idx;
 
     /* Fixed mcycle counter */
     if (target_ctr == 0) {
         return true;
     }
 
-    cpu = env_archcpu(env);
-    if (!cpu->pmu_event_ctr_map) {
-        return false;
-    }
-
-    event_idx = RISCV_PMU_EVENT_HW_CPU_CYCLES;
-    ctr_idx = GPOINTER_TO_UINT(g_hash_table_lookup(cpu->pmu_event_ctr_map,
-                               GUINT_TO_POINTER(event_idx)));
-
-    /* Counter zero is not used for event_ctr_map */
-    if (!ctr_idx) {
-        return false;
-    }
-
-    return (target_ctr == ctr_idx) ? true : false;
-}
-
-static gboolean pmu_remove_event_map(gpointer key, gpointer value,
-                                     gpointer udata)
-{
-    return (GPOINTER_TO_UINT(value) == GPOINTER_TO_UINT(udata)) ? true : false;
+    return pmu_counter_matches(env_archcpu(env), target_ctr,
+                               RISCV_PMU_EVENT_HW_CPU_CYCLES);
 }
 
 static int64_t pmu_icount_ticks_to_ns(int64_t value)
@@ -322,23 +296,14 @@ int riscv_pmu_update_event_map(CPURISCVState *env, uint64_t value,
         return -1;
     }
 
-    /*
-     * Expected mhpmevent value is zero for reset case. Remove the current
-     * mapping.
-     */
+    /* Reprogramming one counter must remove its old subscription, including
+     * when the new selector is zero or an unsupported dormant event. */
+    g_hash_table_remove(cpu->pmu_event_ctr_map, GUINT_TO_POINTER(ctr_idx));
     if (!(value & MHPMEVENT_IDX_MASK)) {
-        g_hash_table_foreach_remove(cpu->pmu_event_ctr_map,
-                                    pmu_remove_event_map,
-                                    GUINT_TO_POINTER(ctr_idx));
         return 0;
     }
 
     event_idx = value & MHPMEVENT_IDX_MASK;
-    if (g_hash_table_lookup(cpu->pmu_event_ctr_map,
-                            GUINT_TO_POINTER(event_idx))) {
-        return 0;
-    }
-
     switch (event_idx) {
     case RISCV_PMU_EVENT_HW_CPU_CYCLES:
     case RISCV_PMU_EVENT_HW_INSTRUCTIONS:
@@ -350,8 +315,8 @@ int riscv_pmu_update_event_map(CPURISCVState *env, uint64_t value,
         /* We don't support any raw events right now */
         return -1;
     }
-    g_hash_table_insert(cpu->pmu_event_ctr_map, GUINT_TO_POINTER(event_idx),
-                        GUINT_TO_POINTER(ctr_idx));
+    g_hash_table_insert(cpu->pmu_event_ctr_map, GUINT_TO_POINTER(ctr_idx),
+                        GUINT_TO_POINTER(event_idx));
 
     return 0;
 }
@@ -366,23 +331,14 @@ static bool pmu_hpmevent_set_of_if_clear(CPURISCVState *env, uint32_t ctr_idx)
     }
 }
 
-static void pmu_timer_trigger_irq(RISCVCPU *cpu,
-                                  enum riscv_pmu_event_idx evt_idx)
+static void pmu_timer_trigger_irq(RISCVCPU *cpu, uint32_t ctr_idx)
 {
-    uint32_t ctr_idx;
     CPURISCVState *env = &cpu->env;
     PMUCTRState *counter;
     int64_t irq_trigger_at;
     uint64_t curr_ctr_val, curr_ctrh_val;
     uint64_t ctr_val;
 
-    if (evt_idx != RISCV_PMU_EVENT_HW_CPU_CYCLES &&
-        evt_idx != RISCV_PMU_EVENT_HW_INSTRUCTIONS) {
-        return;
-    }
-
-    ctr_idx = GPOINTER_TO_UINT(g_hash_table_lookup(cpu->pmu_event_ctr_map,
-                               GUINT_TO_POINTER(evt_idx)));
     if (!riscv_pmu_counter_enabled(cpu, ctr_idx)) {
         return;
     }
@@ -444,9 +400,12 @@ void riscv_pmu_timer_cb(void *priv)
 {
     RISCVCPU *cpu = priv;
 
-    /* Timer event was triggered only for these events */
-    pmu_timer_trigger_irq(cpu, RISCV_PMU_EVENT_HW_CPU_CYCLES);
-    pmu_timer_trigger_irq(cpu, RISCV_PMU_EVENT_HW_INSTRUCTIONS);
+    for (unsigned i = 3; i < 32; i++) {
+        if (pmu_counter_matches(cpu, i, RISCV_PMU_EVENT_HW_CPU_CYCLES) ||
+            pmu_counter_matches(cpu, i, RISCV_PMU_EVENT_HW_INSTRUCTIONS)) {
+            pmu_timer_trigger_irq(cpu, i);
+        }
+    }
 }
 
 int riscv_pmu_setup_timer(CPURISCVState *env, uint64_t value, uint32_t ctr_idx)

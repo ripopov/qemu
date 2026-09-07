@@ -206,9 +206,8 @@ GEM5_QEMU_JIT_API int gem5_qemu_jit_set_fixed_counters(
  * Slots 0..2 and unimplemented slots must be zero. Restore requires a stopped
  * RV64 hart in M mode, validates the whole input before mutation, and does
  * not execute guest CSR writes or acknowledge/post an interrupt.
- * The current QEMU event map supports only one counter per event selector;
- * duplicate nonzero selectors are rejected instead of silently changing the
- * selected counter during restore. Multi-counter event support remains open.
+ * Multiple counters may select the same event, with independent values,
+ * inhibition, privilege filters and overflow state.
  */
 typedef struct Gem5QemuJitHpmState {
     uint32_t version;

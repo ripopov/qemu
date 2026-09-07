@@ -584,7 +584,7 @@ struct ArchCPU {
     QEMUTimer *pmu_timer;
     /* A bitmask of Available programmable counters */
     uint32_t pmu_avail_ctrs;
-    /* Mapping of events to counters */
+    /* Mapping of counter indices to event selectors (many counters/event). */
     GHashTable *pmu_event_ctr_map;
     GHashTable *user_options;
     const GPtrArray *decoders;
