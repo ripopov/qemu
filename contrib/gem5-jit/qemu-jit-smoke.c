@@ -68,6 +68,10 @@ hpm_transfer_smoke(void)
         pending[hart] = gem5_qemu_jit_get_mip(hart);
         state[hart] = saved[hart];
         state[hart].inhibited = state[hart].implemented;
+        if (state[hart].implemented != UINT32_C(0xfffffff8)) {
+            fprintf(stderr, "HPM bank must expose counters 3..31 on every hart\n");
+            return 1;
+        }
         for (unsigned i = 3; i < 32; i++) {
             if (state[hart].implemented & (UINT32_C(1) << i)) {
                 state[hart].counter[i] = UINT64_C(0x1234567800000000) +

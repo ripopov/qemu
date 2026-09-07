@@ -366,7 +366,9 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks,
     };
 
     if (config->profile == GEM5_QEMU_JIT_PROFILE_RVA23S64) {
-        snprintf(profile_cpu, sizeof(profile_cpu), "rva23s64,pmp=true,vlen=%u",
+        /* Match gem5's exposed architectural HPM bank, counters 3..31. */
+        snprintf(profile_cpu, sizeof(profile_cpu),
+                 "rva23s64,pmp=true,pmu-mask=0xfffffff8,vlen=%u",
                  config->vlenb * 8);
         argv[4] = profile_cpu;
     }
@@ -383,6 +385,8 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks,
         RISCV_CPU(next)->env.mhartid = index;
         if (config->profile == GEM5_QEMU_JIT_PROFILE_RVA23S64) {
             object_property_set_bool(OBJECT(next), "pmp", true, &error_abort);
+            object_property_set_int(OBJECT(next), "pmu-mask", UINT32_C(0xfffffff8),
+                                    &error_abort);
         }
         object_property_set_int(OBJECT(next), "vlen", config->vlenb * 8,
                                 &error_abort);
