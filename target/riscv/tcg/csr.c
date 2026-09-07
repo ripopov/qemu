@@ -455,6 +455,31 @@ static RISCVException hmode(CPURISCVState *env, int csrno)
     return RISCV_EXCP_ILLEGAL_INST;
 }
 
+static RISCVException envcfg_pred(CPURISCVState *env, int csrno)
+{
+    RISCVException ret = csrno == CSR_SENVCFG ?
+        smode(env, csrno) : hmode(env, csrno);
+    if (ret != RISCV_EXCP_NONE) {
+        return ret;
+    }
+    /* A machine-denied CSR is not HS-qualified. Check before the generic
+     * CSR privilege check can raise a virtual-instruction exception. */
+    if (!env->debugger && env->priv != PRV_M &&
+        riscv_cpu_cfg(env)->ext_smstateen &&
+        !(env->mstateen[0] & SMSTATEEN0_HSENVCFG)) {
+        return RISCV_EXCP_ILLEGAL_INST;
+    }
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException henvcfgh_pred(CPURISCVState *env, int csrno)
+{
+    if (riscv_cpu_mxl(env) != MXL_RV32) {
+        return RISCV_EXCP_ILLEGAL_INST;
+    }
+    return envcfg_pred(env, csrno);
+}
+
 static RISCVException hmode32(CPURISCVState *env, int csrno)
 {
     if (riscv_cpu_mxl(env) != MXL_RV32) {
@@ -6033,11 +6058,11 @@ riscv_csr_operations csr_ops[CSR_TABLE_SIZE] = {
                        .min_priv_ver = PRIV_VERSION_1_12_0              },
     [CSR_MENVCFGH] = { "menvcfgh", umode32, read_menvcfgh, write_menvcfgh,
                        .min_priv_ver = PRIV_VERSION_1_12_0              },
-    [CSR_SENVCFG]  = { "senvcfg",  smode, read_senvcfg,  write_senvcfg,
+    [CSR_SENVCFG]  = { "senvcfg", envcfg_pred, read_senvcfg, write_senvcfg,
                        .min_priv_ver = PRIV_VERSION_1_12_0              },
-    [CSR_HENVCFG]  = { "henvcfg",  hmode, read_henvcfg, write_henvcfg,
+    [CSR_HENVCFG]  = { "henvcfg", envcfg_pred, read_henvcfg, write_henvcfg,
                        .min_priv_ver = PRIV_VERSION_1_12_0              },
-    [CSR_HENVCFGH] = { "henvcfgh", hmode32, read_henvcfgh, write_henvcfgh,
+    [CSR_HENVCFGH] = { "henvcfgh", henvcfgh_pred, read_henvcfgh, write_henvcfgh,
                        .min_priv_ver = PRIV_VERSION_1_12_0              },
 
     /* Smstateen extension CSRs */
