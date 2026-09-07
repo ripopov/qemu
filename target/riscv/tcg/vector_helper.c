@@ -232,6 +232,10 @@ void NAME##_tlb(CPURISCVState *env, abi_ptr addr,           \
 {                                                           \
     ETYPE data = *((ETYPE *)vd + H(idx));                   \
     cpu_##STSUF##_data_ra(env, addr, data, retaddr);        \
+    if (riscv_gem5_jit_enabled) {                           \
+        helper_jit_store_notify(env, addr, sizeof(ETYPE),  \
+                                riscv_env_mmu_index(env, false)); \
+    }                                                       \
 }                                                           \
                                                             \
 static inline QEMU_ALWAYS_INLINE                            \
@@ -411,6 +415,13 @@ vext_page_ldst_us(CPURISCVState *env, void *vd, target_ulong addr,
                     k++;
                 }
             }
+        }
+        if (!is_load && riscv_gem5_jit_enabled) {
+            /* All bytes in this page chunk were written, including the
+             * memcpy fast path. Masked/indexed/strided paths notify only
+             * through the element helpers for stores actually performed. */
+            helper_jit_store_notify(env, adjust_addr(env, addr), size,
+                                    mmu_index);
         }
         env->vstart += elems;
     } else {

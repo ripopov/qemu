@@ -132,7 +132,12 @@ FSH/FSW/FSD (and compressed stores delegating to these translators) use the
 same post-store notification generator as scalar stores and AMOs. Directed
 same-value peer FP stores pass JIT/O3 checkpoint continuation and cold restore
 for 16/32/64-bit widths; this does not establish all alias/fault cases.
-Vector, helper, CMO and device
+Vector stores notify after each completed slow-path element and after each
+completed direct-memory page chunk, including the memcpy path. Fully masked
+stores issue no notification. Unit-stride, strided, indexed, and fully masked
+peer probes pass JIT/O3 checkpoint continuation and cold restore. Partial
+masks, fault/restart boundaries, translated aliases and all segmented/whole
+register variants still need directed qualification. Other helper, CMO and device
 write paths, physical SC-address revalidation, and alias tests remain open.
 
 Embedded S/VS timers use an external-timer hook instead of QEMU's ACLINT
