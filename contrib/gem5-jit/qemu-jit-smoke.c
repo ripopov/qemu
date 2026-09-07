@@ -114,6 +114,55 @@ stateen_reserved_smoke(void)
 }
 
 static int
+stateen_transfer_smoke(void)
+{
+    Gem5QemuJitStateenState saved[2], expected[2], desired, observed, bad;
+    for (unsigned hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_get_stateen(hart, &saved[hart], sizeof(saved[hart]))) {
+            return -1;
+        }
+        desired = saved[hart];
+        for (unsigned index = 0; index < 4; index++) {
+            desired.value[0][index] = 0;
+            desired.value[1][index] = hart ? 0 : desired.mask[1][index];
+        }
+        expected[hart] = desired;
+        if (gem5_qemu_jit_set_stateen(hart, &desired, sizeof(desired)) ||
+            gem5_qemu_jit_get_stateen(hart, &observed, sizeof(observed)) ||
+            memcmp(&desired, &observed, sizeof(desired))) {
+            return -1;
+        }
+        uint64_t visible;
+        if (gem5_qemu_jit_get_csr(hart, 0x60c, &visible) || visible) {
+            return -1;
+        }
+        for (unsigned test = 0; test < 4; test++) {
+            bad = desired;
+            bad.value[0][0] = bad.mask[0][0];
+            switch (test) {
+            case 0: bad.version++; break;
+            case 1: bad.size--; break;
+            case 2: bad.mask[1][3] ^= 1; break;
+            case 3: bad.value[2][3] = 1; break;
+            }
+            if (gem5_qemu_jit_set_stateen(hart, &bad, sizeof(bad)) == 0 ||
+                gem5_qemu_jit_get_stateen(hart, &observed, sizeof(observed)) ||
+                memcmp(&desired, &observed, sizeof(desired))) {
+                return -1;
+            }
+        }
+    }
+    for (unsigned hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_get_stateen(hart, &observed, sizeof(observed)) ||
+            memcmp(&expected[hart], &observed, sizeof(observed)) ||
+            gem5_qemu_jit_set_stateen(hart, &saved[hart], sizeof(saved[hart]))) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int
 vector_state_smoke(void)
 {
     Gem5QemuJitVectorState saved[2], expected[2], observed, bad;
@@ -810,6 +859,10 @@ main(int argc, char **argv)
     }
     if (profile_test && stateen_reserved_smoke()) {
         fprintf(stderr, "reserved supervisor state-enable bits writable\n");
+        return 1;
+    }
+    if (profile_test && stateen_transfer_smoke()) {
+        fprintf(stderr, "raw state-enable transfer failed\n");
         return 1;
     }
     if (vector_state_smoke()) {

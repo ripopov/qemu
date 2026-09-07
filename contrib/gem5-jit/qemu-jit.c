@@ -819,6 +819,56 @@ gem5_qemu_jit_restore_mstatus(uint32_t instance_id, unsigned version,
     return 0;
 }
 
+int
+gem5_qemu_jit_get_stateen(uint32_t instance_id,
+                         Gem5QemuJitStateenState *state, size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    if (!hart || !state || size != sizeof(*state)) {
+        return -1;
+    }
+    CPURISCVState *env = &hart->riscv_cpu->env;
+    uint64_t *banks[] = {env->mstateen, env->hstateen, env->sstateen};
+    memset(state, 0, sizeof(*state));
+    state->version = GEM5_QEMU_JIT_STATEEN_VERSION;
+    state->size = sizeof(*state);
+    for (unsigned level = 0; level < 3; level++) {
+        for (unsigned index = 0; index < 4; index++) {
+            state->value[level][index] = banks[level][index];
+            state->mask[level][index] = riscv_stateen_mask(env, level, index);
+        }
+    }
+    return 0;
+}
+
+int
+gem5_qemu_jit_set_stateen(uint32_t instance_id,
+                         const Gem5QemuJitStateenState *state, size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    if (!hart || !state || size != sizeof(*state) ||
+        state->version != GEM5_QEMU_JIT_STATEEN_VERSION ||
+        state->size != sizeof(*state)) {
+        return -1;
+    }
+    CPURISCVState *env = &hart->riscv_cpu->env;
+    uint64_t *banks[] = {env->mstateen, env->hstateen, env->sstateen};
+    /* Validate the complete snapshot before mutating any bank. */
+    for (unsigned level = 0; level < 3; level++) {
+        for (unsigned index = 0; index < 4; index++) {
+            uint64_t mask = riscv_stateen_mask(env, level, index);
+            if (state->mask[level][index] != mask ||
+                (state->value[level][index] & ~mask)) {
+                return -1;
+            }
+        }
+    }
+    for (unsigned level = 0; level < 3; level++) {
+        memcpy(banks[level], state->value[level], sizeof(state->value[level]));
+    }
+    return 0;
+}
+
 uint64_t
 gem5_qemu_jit_get_mip(uint32_t instance_id)
 {

@@ -181,6 +181,19 @@ GEM5_QEMU_JIT_API int gem5_qemu_jit_get_csr(
 GEM5_QEMU_JIT_API int gem5_qemu_jit_set_csr(
     uint32_t instance_id, unsigned csr, uint64_t value);
 #define GEM5_QEMU_JIT_MSTATUS_RESTORE_VERSION 1
+#define GEM5_QEMU_JIT_STATEEN_VERSION 1
+typedef struct Gem5QemuJitStateenState {
+    uint32_t version;
+    uint32_t size;
+    /* Rows M/H/S, columns 0..3. Raw storage, not ancestor-masked CSR reads.
+     * Masks report implemented bits independently of current gate values. */
+    uint64_t value[3][4];
+    uint64_t mask[3][4];
+} Gem5QemuJitStateenState;
+GEM5_QEMU_JIT_API int gem5_qemu_jit_get_stateen(
+    uint32_t instance_id, Gem5QemuJitStateenState *state, size_t size);
+GEM5_QEMU_JIT_API int gem5_qemu_jit_set_stateen(
+    uint32_t instance_id, const Gem5QemuJitStateenState *state, size_t size);
 /* Trusted host restoration, only in M mode with V=0. Applies normal WARL
  * legalization plus exact restoration of MPV/GVA trap state. Does not change
  * the guest CSR-write policy. Rejects unsupported versions before mutation. */

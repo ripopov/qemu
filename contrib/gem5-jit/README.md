@@ -50,6 +50,14 @@ into gem5: full H/VS state transfer and gem5-owned SSTC deadlines remain
 required before full-profile CPU switching or Linux use is qualified.
 
 The mode migration API explicitly reads/writes privilege and virtualization.
+Version-1 state-enable snapshots contain raw M/H/S banks and the implemented
+bit masks. Unlike architectural H/S CSR reads, snapshots retain state hidden
+by ancestor gates. Imports check version, size, all masks and reserved bits
+before any mutation. The mask definitions are shared with QEMU's architectural
+CSR handlers. The two-hart smoke checks hidden-state round trips, isolation,
+and rejection without partial updates. A consumer must compare masks before
+claiming feature compatibility; it must not silently discard unknown state.
+
 Version-1 `restore_mstatus` is a trusted host operation, separate from guest
 CSR writes. It restores MPV/GVA trap fields as well as normally writable
 status fields, retaining WARL legalization. Call it only with M mode and V=0;

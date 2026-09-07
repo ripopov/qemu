@@ -3515,8 +3515,7 @@ static RISCVException write_mstateen(CPURISCVState *env, int csrno,
     return RISCV_EXCP_NONE;
 }
 
-static RISCVException write_mstateen0(CPURISCVState *env, int csrno,
-                                      target_ulong new_val, uintptr_t ra)
+static uint64_t mstateen0_mask(CPURISCVState *env)
 {
     uint64_t wr_mask = SMSTATEEN_STATEEN | SMSTATEEN0_HSENVCFG;
     if (!riscv_has_ext(env, RVF)) {
@@ -3548,7 +3547,13 @@ static RISCVException write_mstateen0(CPURISCVState *env, int csrno,
         }
     }
 
-    return write_mstateen(env, csrno, wr_mask, new_val);
+    return wr_mask;
+}
+
+static RISCVException write_mstateen0(CPURISCVState *env, int csrno,
+                                      target_ulong new_val, uintptr_t ra)
+{
+    return write_mstateen(env, csrno, mstateen0_mask(env), new_val);
 }
 
 static RISCVException write_mstateen_1_3(CPURISCVState *env, int csrno,
@@ -3637,8 +3642,7 @@ static RISCVException write_hstateen(CPURISCVState *env, int csrno,
     return RISCV_EXCP_NONE;
 }
 
-static RISCVException write_hstateen0(CPURISCVState *env, int csrno,
-                                      target_ulong new_val, uintptr_t ra)
+static uint64_t hstateen0_mask(CPURISCVState *env)
 {
     uint64_t wr_mask = SMSTATEEN_STATEEN | SMSTATEEN0_HSENVCFG;
 
@@ -3667,7 +3671,27 @@ static RISCVException write_hstateen0(CPURISCVState *env, int csrno,
         }
     }
 
-    return write_hstateen(env, csrno, wr_mask, new_val);
+    return wr_mask;
+}
+
+uint64_t riscv_stateen_mask(CPURISCVState *env, unsigned level, unsigned index)
+{
+    if (!riscv_cpu_cfg(env)->ext_smstateen || level > 2 || index > 3) {
+        return 0;
+    }
+    if (level == 2) {
+        return index == 0 && !riscv_has_ext(env, RVF) ? SMSTATEEN0_FCSR : 0;
+    }
+    if (index != 0) {
+        return SMSTATEEN_STATEEN;
+    }
+    return level == 0 ? mstateen0_mask(env) : hstateen0_mask(env);
+}
+
+static RISCVException write_hstateen0(CPURISCVState *env, int csrno,
+                                      target_ulong new_val, uintptr_t ra)
+{
+    return write_hstateen(env, csrno, hstateen0_mask(env), new_val);
 }
 
 static RISCVException write_hstateen_1_3(CPURISCVState *env, int csrno,
