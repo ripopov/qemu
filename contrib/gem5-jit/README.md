@@ -140,6 +140,12 @@ masks, fault/restart boundaries, translated aliases and all segmented/whole
 register variants still need directed qualification. Other helper, CMO and device
 write paths and general alias tests remain open.
 
+CBO.ZERO notifies after direct RAM memset and after each completed byte of
+its I/O fallback. A same-value peer zeroing probe (initial block all zeros)
+passes continuation and cold restore on JIT and O3. The I/O fallback's
+partial-fault behavior is implemented but not yet directly qualified; general
+external/device writes still require host-side invalidation integration.
+
 SC revalidates its translated physical address and access width against the
 original LR metadata before attempting the comparison/store. The model
 permits success only for an exact address/width match; mismatch takes the

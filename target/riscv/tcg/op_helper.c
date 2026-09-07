@@ -266,6 +266,9 @@ void helper_cbo_zero(CPURISCVState *env, target_ulong address)
 
     if (likely(mem)) {
         memset(mem, 0, cbozlen);
+        if (riscv_gem5_jit_enabled) {
+            helper_jit_store_notify(env, address, cbozlen, mmu_idx);
+        }
     } else {
         /*
          * This means that we're dealing with an I/O page. Section 4.2
@@ -280,6 +283,10 @@ void helper_cbo_zero(CPURISCVState *env, target_ulong address)
          */
         for (int i = 0; i < cbozlen; i++) {
             cpu_stb_mmuidx_ra(env, address + i, 0, mmu_idx, ra);
+            if (riscv_gem5_jit_enabled) {
+                /* Notify completed writes even if a later byte faults. */
+                helper_jit_store_notify(env, address + i, 1, mmu_idx);
+            }
         }
     }
 }
