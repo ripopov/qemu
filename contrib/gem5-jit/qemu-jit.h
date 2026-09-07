@@ -95,6 +95,28 @@ typedef struct Gem5QemuJitRunResult {
 } Gem5QemuJitRunResult;
 
 #define GEM5_QEMU_JIT_VECTOR_STATE_VERSION 1
+#define GEM5_QEMU_JIT_RESERVATION_STATE_VERSION 1
+/* Backend-local LR/SC migration token, NOT a physical coherence monitor.
+ * virtual_address is QEMU's effective LR address; expected_value is its
+ * comparison operand. No access width or physical reservation granule is
+ * implied. Only stopped RV64 harts are supported. Import after translation
+ * invalidation, which deliberately clears reservations. The host must ensure
+ * memory and translation state belong to the same snapshot and account for
+ * intervening writes; this API alone does not transfer an O3 reservation.
+ * Invalid tokens have valid=0 and both payload fields zero. */
+typedef struct Gem5QemuJitReservationState {
+    uint32_t version;
+    uint32_t size;
+    uint32_t valid;
+    uint32_t reserved;
+    uint64_t virtual_address;
+    uint64_t expected_value;
+} Gem5QemuJitReservationState;
+GEM5_QEMU_JIT_API int gem5_qemu_jit_get_reservation_state(
+    uint32_t instance_id, Gem5QemuJitReservationState *state, size_t size);
+GEM5_QEMU_JIT_API int gem5_qemu_jit_set_reservation_state(
+    uint32_t instance_id, const Gem5QemuJitReservationState *state, size_t size);
+
 #define GEM5_QEMU_JIT_PMP_STATE_VERSION 1
 #define GEM5_QEMU_JIT_MAX_PMPS 64
 /* Trusted migration state, not architectural CSR writes. Can replace locked

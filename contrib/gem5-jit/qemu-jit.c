@@ -738,6 +738,52 @@ gem5_qemu_jit_get_pmp_state(uint32_t instance_id,
 }
 
 int
+gem5_qemu_jit_get_reservation_state(uint32_t instance_id,
+                                  Gem5QemuJitReservationState *state,
+                                  size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    CPURISCVState *env;
+    if (!hart || hart->running || !state || size != sizeof(*state) ||
+        riscv_cpu_mxl(&hart->riscv_cpu->env) != MXL_RV64) {
+        return -1;
+    }
+    env = &hart->riscv_cpu->env;
+    memset(state, 0, sizeof(*state));
+    state->version = GEM5_QEMU_JIT_RESERVATION_STATE_VERSION;
+    state->size = sizeof(*state);
+    if (env->load_res != UINT64_MAX) {
+        state->valid = 1;
+        state->virtual_address = env->load_res;
+        state->expected_value = env->load_val;
+    }
+    return 0;
+}
+
+int
+gem5_qemu_jit_set_reservation_state(uint32_t instance_id,
+                                  const Gem5QemuJitReservationState *state,
+                                  size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    CPURISCVState *env;
+    if (!hart || hart->running || !state || size != sizeof(*state) ||
+        riscv_cpu_mxl(&hart->riscv_cpu->env) != MXL_RV64 ||
+        state->version != GEM5_QEMU_JIT_RESERVATION_STATE_VERSION ||
+        state->size != sizeof(*state) || state->reserved || state->valid > 1 ||
+        (state->valid && state->virtual_address == UINT64_MAX) ||
+        (!state->valid && (state->virtual_address || state->expected_value))) {
+        return -1;
+    }
+    /* Validate the entire token before changing either field. No guest CSR
+     * operations, memory accesses, or interrupt changes belong in restore. */
+    env = &hart->riscv_cpu->env;
+    env->load_res = state->valid ? state->virtual_address : UINT64_MAX;
+    env->load_val = state->valid ? state->expected_value : 0;
+    return 0;
+}
+
+int
 gem5_qemu_jit_set_pmp_state(uint32_t instance_id,
                           const Gem5QemuJitPmpState *state, size_t size)
 {

@@ -110,6 +110,18 @@ VS/VU in profile mode), checks successful SC without interference, and checks
 failed SC after explicit invalidation or a different-value store by the other
 hart. This does not qualify all reservation-granule or eventual-progress rules.
 
+The version-1 reservation snapshot API exports/imports a stopped RV64 hart's
+backend-local virtual-address and expected-value token. Import validates all
+fields before mutation; an invalid token must have zero payload fields. It
+does not access memory, raise interrupts, or perform a guest operation. Import
+must follow any translation invalidation and use the matching memory and
+translation snapshot. The smoke checks restoration after invalidation,
+explicit clearing, malformed-token rejection atomicity, and hart isolation.
+This is not a physical coherence monitor: access width, physical translation,
+same-value write invalidations, and O3 monitor reconstruction require further
+integration. Neither full JIT checkpoint restoration nor cross-model LR/SC
+preservation is established by the backend snapshot test.
+
 Embedded S/VS timers use an external-timer hook instead of QEMU's ACLINT
 timebase cast and native timer queue.
 
