@@ -138,7 +138,15 @@ stores issue no notification. Unit-stride, strided, indexed, and fully masked
 peer probes pass JIT/O3 checkpoint continuation and cold restore. Partial
 masks, fault/restart boundaries, translated aliases and all segmented/whole
 register variants still need directed qualification. Other helper, CMO and device
-write paths, physical SC-address revalidation, and alias tests remain open.
+write paths and general alias tests remain open.
+
+SC revalidates its translated physical address and access width against the
+original LR metadata before attempting the comparison/store. The model
+permits success only for an exact address/width match; mismatch takes the
+ordinary failed-SC path, including its permission probe. Backend tests cover
+imported physical/width mismatch, while the gem5 Sv39 remap fixture checks
+same-VA/different-PA SC across checkpoints. Two-stage translation and fault
+cases remain unqualified.
 
 Embedded S/VS timers use an external-timer hook instead of QEMU's ACLINT
 timebase cast and native timer queue.

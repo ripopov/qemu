@@ -75,6 +75,13 @@ static bool gen_sc(DisasContext *ctx, arg_atomic *a, MemOp mop)
     decode_save_opc(ctx, 0);
     src1 = get_address(ctx, a->rs1, 0);
     tcg_gen_brcond_tl(TCG_COND_NE, load_res, src1, l1);
+    if (riscv_gem5_jit_enabled) {
+        TCGv_i32 matches = tcg_temp_new_i32();
+        gen_helper_jit_sc_matches(matches, tcg_env, src1,
+                                  tcg_constant_i32(memop_size(mop)),
+                                  tcg_constant_i32(ctx->mem_idx));
+        tcg_gen_brcondi_i32(TCG_COND_EQ, matches, 0, l1);
+    }
 
     /*
      * Note that the TCG atomic primitives are SC,

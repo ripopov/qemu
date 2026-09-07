@@ -1,6 +1,7 @@
 /* Exceptions */
 DEF_HELPER_2(raise_exception, noreturn, env, i32)
 DEF_HELPER_4(jit_reserve, void, env, tl, i32, i32)
+DEF_HELPER_4(jit_sc_matches, i32, env, tl, i32, i32)
 DEF_HELPER_4(jit_store_notify, void, env, tl, i32, i32)
 
 /* Floating Point - rounding mode */

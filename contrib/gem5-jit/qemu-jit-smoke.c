@@ -873,7 +873,7 @@ reservation_smoke(int profile_test)
     memcpy(memory + 128, program, sizeof(program));
     memcpy(memory + 192, &interfering_store, sizeof(interfering_store));
     for (hart = 0; hart < 2; hart++) {
-        for (invalidate = 0; invalidate < 5; invalidate++) {
+        for (invalidate = 0; invalidate < 7; invalidate++) {
             memset(memory + 768, 0, 8);
             memory[768] = 17;
             if (gem5_qemu_jit_set_gpr(hart, 7, 768) ||
@@ -957,6 +957,20 @@ reservation_smoke(int profile_test)
                                                        sizeof(saved))) {
                     return -1;
                 }
+                /* Keep VA/value identical while changing the physical LR
+                 * identity or width. Import is valid, but SC must not use
+                 * that token for the current physical access. */
+                if (invalidate >= 5) {
+                    if (invalidate == 5) {
+                        saved.physical_address += 64;
+                    } else {
+                        saved.access_size = 4;
+                    }
+                    if (gem5_qemu_jit_set_reservation_state(hart, &saved,
+                                                           sizeof(saved))) {
+                        return -1;
+                    }
+                }
             } else if (invalidate == 1) {
                 gem5_qemu_jit_invalidate_translations(hart);
             }
@@ -980,7 +994,7 @@ reservation_smoke(int profile_test)
                 (gem5_qemu_jit_get_gpr(hart, 6) == 0) !=
                     (invalidate == 0 || invalidate == 3) ||
                 memory[768] != (invalidate == 2 ? 99 :
-                               (invalidate == 1 || invalidate == 4) ? 17 : 42)) {
+                               (invalidate == 1 || invalidate >= 4) ? 17 : 42)) {
                 fprintf(stderr, "reservation hart %u invalidate=%u sc=%llu\n",
                         hart, invalidate,
                         (unsigned long long)gem5_qemu_jit_get_gpr(hart, 6));

@@ -53,6 +53,28 @@ void helper_jit_reserve(CPURISCVState *env, target_ulong addr,
 #endif
 }
 
+uint32_t helper_jit_sc_matches(CPURISCVState *env, target_ulong addr,
+                               uint32_t size, uint32_t mmu_idx)
+{
+#ifndef CONFIG_USER_ONLY
+    CPUTLBEntryFull *full;
+    void *host;
+    int flags;
+    if (env->load_res == UINT64_MAX || env->jit_load_size != size) {
+        return 0;
+    }
+    /* Revalidate the current translation without using the current mapping
+     * to reconstruct the original LR identity. The failed-SC path handles
+     * store permission faults using the ordinary architectural probe. */
+    flags = probe_access_full(env, addr, size, MMU_DATA_STORE, mmu_idx,
+                              true, &host, &full, GETPC());
+    return !(flags & TLB_INVALID_MASK) &&
+        (full->phys_addr | (addr & ~TARGET_PAGE_MASK)) == env->jit_load_paddr;
+#else
+    return 0;
+#endif
+}
+
 void helper_jit_store_notify(CPURISCVState *env, target_ulong addr,
                              uint32_t size, uint32_t mmu_idx)
 {
