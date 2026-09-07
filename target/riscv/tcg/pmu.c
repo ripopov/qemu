@@ -61,6 +61,11 @@ static bool riscv_pmu_counter_enabled(RISCVCPU *cpu, uint32_t ctr_idx)
  *  env->priv and env->virt_enabled contain old priv and old virt and
  *  new priv and new virt values are passed in as arguments.
  */
+uint64_t riscv_pmu_instret_source(CPURISCVState *env)
+{
+    return icount_get_raw() - env->pmu_unretired_insns;
+}
+
 static void riscv_pmu_icount_update_priv(CPURISCVState *env,
                                          privilege_mode_t newpriv,
                                          bool new_virt)
@@ -71,7 +76,7 @@ static void riscv_pmu_icount_update_priv(CPURISCVState *env,
     uint64_t delta;
 
     if (icount_enabled()) {
-        current_icount = icount_get_raw();
+        current_icount = riscv_pmu_instret_source(env);
     } else {
         current_icount = cpu_get_host_ticks();
     }
@@ -144,11 +149,13 @@ void riscv_pmu_account_xret(CPURISCVState *env, privilege_mode_t oldpriv,
 {
     uint64_t *old_counts, *new_snapshot;
 
-    if (!icount_enabled() ||
+    if (riscv_cpu_mxl(env) == MXL_RV64 || !icount_enabled() ||
         (oldpriv == env->priv && oldvirt == env->virt_enabled)) {
         return;
     }
-    /* set_mode sampled icount before this xRET retires. Attribute that
+    /* Legacy RV32 compensation; RV64 uses pre-retirement guest CSR samples
+     * and excludes nonretired trap instructions at their source instead.
+     * set_mode sampled icount before this xRET retires. Attribute that
      * pending instruction to its originating mode, and start the new mode
      * after it. This path is for successful guest returns only: host mode
      * restoration and trap entry must not manufacture a retirement.
@@ -392,7 +399,7 @@ static void pmu_timer_trigger_irq(RISCVCPU *cpu,
      * at that instruction boundary, before the source reaches the adjusted
      * baseline. Do not mistake this transient -1 delta for counter overflow.
      */
-    if (icount_enabled() &&
+    if (riscv_cpu_mxl(env) != MXL_RV64 && icount_enabled() &&
         riscv_pmu_ctr_monitor_instructions(env, ctr_idx) &&
         counter->mhpmcounter_prev ==
             riscv_pmu_ctr_get_fixed_counters_val(env, ctr_idx) + 1) {

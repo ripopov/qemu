@@ -847,11 +847,6 @@ gem5_qemu_jit_get_fixed_counters(uint32_t instance_id,
     state->instretcfg = env->minstretcfg;
     riscv_pmu_read_ctr(env, &state->cycle, false, 0);
     riscv_pmu_read_ctr(env, &state->instret, false, 2);
-    if (!(state->inhibited & 4) && icount_enabled() &&
-        env->pmu_ctrs[2].mhpmcounter_prev ==
-            riscv_pmu_ctr_get_fixed_counters_val(env, 2) + 1) {
-        state->instret = env->pmu_ctrs[2].mhpmcounter_val;
-    }
     return 0;
 }
 
@@ -914,15 +909,6 @@ gem5_qemu_jit_get_hpm_state(uint32_t instance_id,
         }
         state->event[i] = env->mhpmevent_val[i];
         riscv_pmu_read_ctr(env, &state->counter[i], false, i);
-        /* Guest counter-write compensation may put the source baseline one
-         * ahead until the next instruction. Export the just-written sample,
-         * not the transient negative delta seen by an internal timer. */
-        if (!(state->inhibited & (UINT32_C(1) << i)) &&
-            icount_enabled() && riscv_pmu_ctr_monitor_instructions(env, i) &&
-            env->pmu_ctrs[i].mhpmcounter_prev ==
-                riscv_pmu_ctr_get_fixed_counters_val(env, i) + 1) {
-            state->counter[i] = env->pmu_ctrs[i].mhpmcounter_val;
-        }
     }
     return 0;
 }

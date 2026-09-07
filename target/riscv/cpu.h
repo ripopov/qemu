@@ -466,6 +466,9 @@ struct CPUArchState {
     uint64_t mhpmevent_val[RV_MAX_MHPMEVENTS];
 
     PMUFixedCtrState pmu_fixed_ctrs[2];
+    /* TCG icount includes executed ECALL/EBREAK instructions, which do not
+     * retire. This source correction is backend-local, not migrated state. */
+    uint64_t pmu_unretired_insns;
 
     uint64_t sscratch;
     uint64_t mscratch;

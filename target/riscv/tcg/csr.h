@@ -13,7 +13,7 @@
 #include "cpu_bits.h"
 
 RISCVException riscv_csrr(CPURISCVState *env, int csrno,
-                          target_ulong *ret_value);
+                           target_ulong *ret_value, uintptr_t ra);
 
 RISCVException riscv_csrrw(CPURISCVState *env, int csrno,
                            target_ulong *ret_value, target_ulong new_value,

@@ -1320,7 +1320,7 @@ uint64_t riscv_pmu_ctr_get_fixed_counters_val(CPURISCVState *env,
 
     if (!cfg_val) {
         if (icount_enabled()) {
-                curr_val = inst ? icount_get_raw() : icount_get();
+                curr_val = inst ? riscv_pmu_instret_source(env) : icount_get();
         } else {
             curr_val = cpu_get_host_ticks();
         }
@@ -1409,19 +1409,13 @@ static RISCVException riscv_pmu_write_ctrh(CPURISCVState *env, target_ulong val,
     return RISCV_EXCP_NONE;
 }
 
-static void pmu_skip_counter_write_inst(CPURISCVState *env, unsigned idx,
-                                       uintptr_t ra)
+static bool pmu_instruction_counter_active(CPURISCVState *env, unsigned idx)
 {
     uint64_t cfg, inhibit;
 
-    /* A guest counter write takes effect after its own retirement. icount
-     * has not charged that instruction yet, so exclude it from the delta
-     * added to the newly written value. Host restoration (ra == 0) retires
-     * no instruction and must not receive this compensation.
-     */
-    if (!ra || !icount_enabled() || (env->mcountinhibit & BIT(idx)) ||
+    if ((env->mcountinhibit & BIT(idx)) ||
         !riscv_pmu_ctr_monitor_instructions(env, idx)) {
-        return;
+        return false;
     }
     cfg = idx == 2 ? env->minstretcfg : env->mhpmevent_val[idx];
     if (env->priv == PRV_M) {
@@ -1431,7 +1425,18 @@ static void pmu_skip_counter_write_inst(CPURISCVState *env, unsigned idx,
     } else {
         inhibit = env->virt_enabled ? MHPMEVENT_BIT_VUINH : MHPMEVENT_BIT_UINH;
     }
-    if (!(cfg & inhibit)) {
+    return !(cfg & inhibit);
+}
+
+static void pmu_skip_counter_write_inst(CPURISCVState *env, unsigned idx,
+                                       uintptr_t ra)
+{
+    /* RV64 samples now exclude the executing reader explicitly. A guest
+     * write's raw icount baseline already includes the writing instruction.
+     * Retain the older RV32 path until its split-CSR behavior is qualified.
+     */
+    if (riscv_cpu_mxl(env) != MXL_RV64 && ra && icount_enabled() &&
+        pmu_instruction_counter_active(env, idx)) {
         env->pmu_ctrs[idx].mhpmcounter_prev++;
     }
 }
@@ -5798,6 +5803,21 @@ static RISCVException riscv_csrrw_do64(CPURISCVState *env, int csrno,
         if (ret != RISCV_EXCP_NONE) {
             return ret;
         }
+        /* TCG icount includes the executing CSR instruction. Architectural
+         * retired-instruction reads precede its retirement. Keep host reads
+         * (ra == 0), stopped counters and filtered-out modes unchanged. */
+        if (ra && riscv_cpu_mxl(env) == MXL_RV64 && icount_enabled()) {
+            int idx = -1;
+            if (csrno >= CSR_MCYCLE && csrno <= CSR_MHPMCOUNTER31) {
+                idx = csrno - CSR_MCYCLE;
+            } else if (csrno >= CSR_CYCLE && csrno <= CSR_HPMCOUNTER31) {
+                idx = csrno - CSR_CYCLE;
+            }
+            if ((idx == 2 || idx >= 3) &&
+                pmu_instruction_counter_active(env, idx)) {
+                old_value--;
+            }
+        }
     }
 
     /* write value if writable and write mask set, otherwise drop writes */
@@ -5820,14 +5840,14 @@ static RISCVException riscv_csrrw_do64(CPURISCVState *env, int csrno,
 }
 
 RISCVException riscv_csrr(CPURISCVState *env, int csrno,
-                           target_ulong *ret_value)
+                           target_ulong *ret_value, uintptr_t ra)
 {
     RISCVException ret = riscv_csrrw_check(env, csrno, false);
     if (ret != RISCV_EXCP_NONE) {
         return ret;
     }
 
-    return riscv_csrrw_do64(env, csrno, ret_value, 0, 0, 0);
+    return riscv_csrrw_do64(env, csrno, ret_value, 0, 0, ra);
 }
 
 RISCVException riscv_csrrw(CPURISCVState *env, int csrno,
@@ -5852,7 +5872,7 @@ RISCVException riscv_csr_read_i64(CPURISCVState *env, int csrno, uint64_t *res)
 {
     RISCVException ret;
     target_ulong val = 0;
-    ret = riscv_csrr(env, csrno, &val);
+    ret = riscv_csrr(env, csrno, &val, 0);
     *res = val;
     return ret;
 }
@@ -5974,7 +5994,7 @@ RISCVException riscv_csrrw_debug(CPURISCVState *env, int csrno,
     env->debugger = true;
 #endif
     if (!write_mask) {
-        ret = riscv_csrr(env, csrno, ret_value);
+        ret = riscv_csrr(env, csrno, ret_value, 0);
     } else {
         ret = riscv_csrrw(env, csrno, ret_value, new_value, write_mask, 0);
     }

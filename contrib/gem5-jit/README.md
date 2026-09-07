@@ -25,6 +25,15 @@ smoke. The gem5 integration restores fixed samples at startup/takeover and
 imports samples after batch retirement accounting; active continuity needs
 the corresponding gem5 checkpoint and handoff tests, not just this smoke.
 
+RV64 retired-instruction CSR reads now return the pre-retirement sample:
+guest read helpers carry a return address through the CSR layer, while host
+reads retain the unadjusted source sample. Guest writes no longer need the
+old extra RV64 baseline increment, and xRET no longer receives the old RV64
+mode correction. ECALL/EBREAK are removed from the PMU instruction source
+before trap-mode accounting. Other fault classes and multicore source isolation
+still require qualification. These source changes do not redefine the run
+result's raw TCG execution count as a fully qualified retired-instruction count.
+
 The adapter supports multiple gem5 JitCPU objects in one process. The first
 adapter initialization fixes the instance count and creates one QEMU RISC-V
 vCPU per instance. Each vCPU receives a unique instance ID, gem5 hart ID, and

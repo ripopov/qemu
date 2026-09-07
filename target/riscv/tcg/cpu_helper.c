@@ -2085,6 +2085,13 @@ void riscv_cpu_do_interrupt(CPUState *cs)
         return;
     }
 
+    if (!async && riscv_cpu_mxl(env) == MXL_RV64 && icount_enabled() &&
+        (cause == RISCV_EXCP_U_ECALL || cause == RISCV_EXCP_S_ECALL ||
+         cause == RISCV_EXCP_VS_ECALL || cause == RISCV_EXCP_M_ECALL ||
+         cause == RISCV_EXCP_BREAKPOINT)) {
+        env->pmu_unretired_insns++;
+    }
+
     if (!async) {
         /* set tval to badaddr for traps with address information */
         switch (cause) {
