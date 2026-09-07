@@ -301,10 +301,10 @@ mstatus_restore_smoke(void)
                 gem5_qemu_jit_restore_mstatus(hart, 2, expected ^ mask) == 0 ||
                 gem5_qemu_jit_get_csr(hart, 0x300, &observed) ||
                 observed != expected ||
-                /* Guest accessors must still leave trap fields unchanged. */
+                /* Ordinary M-mode CSR writes must also restore trap frames. */
                 gem5_qemu_jit_set_csr(hart, 0x300, expected ^ mask) ||
                 gem5_qemu_jit_get_csr(hart, 0x300, &observed) ||
-                observed != expected) {
+                observed != (expected ^ mask)) {
                 return -1;
             }
         }

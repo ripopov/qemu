@@ -942,7 +942,7 @@ gem5_qemu_jit_restore_mstatus(uint32_t instance_id, unsigned version,
     if (gem5_qemu_jit_set_csr(instance_id, CSR_MSTATUS, value)) {
         return -1;
     }
-    /* Guest writes intentionally cannot restore these hardware trap fields. */
+    /* Keep trap fields explicit in the versioned host restoration contract. */
     env->mstatus = (env->mstatus & ~trap_mask) | (value & trap_mask);
     if ((old ^ env->mstatus) & trap_mask) {
         tlb_flush(hart->cpu);
