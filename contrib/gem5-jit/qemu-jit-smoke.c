@@ -365,6 +365,79 @@ timer_smoke(void)
 }
 
 static int
+pmp_state_smoke(void)
+{
+    Gem5QemuJitPmpState saved[2], state[2], actual, invalid;
+    uint64_t address = 0;
+    unsigned hart, test;
+    for (hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_get_pmp_state(hart, &saved[hart], sizeof(actual)) ||
+            saved[hart].regions < 2) {
+            fprintf(stderr, "PMP hart %u regions %u\n", hart, saved[hart].regions);
+            return -1;
+        }
+        state[hart] = saved[hart];
+        state[hart].address[0] = 64 + hart * 16;
+        state[hart].address[1] = 128 + hart * 16;
+        state[hart].config[0] = 0;
+        state[hart].config[1] = 0x8f; /* Locked TOR, RWX. */
+        if (gem5_qemu_jit_set_pmp_state(hart, &state[hart], sizeof(actual)) ||
+            gem5_qemu_jit_set_csr(hart, 0x3b0, 1) ||
+            gem5_qemu_jit_get_csr(hart, 0x3b0, &address) ||
+            address != state[hart].address[0]) {
+            fprintf(stderr, "PMP CSR hart %u address %llu expected %llu priv %u\n",
+                    hart, (unsigned long long)address,
+                    (unsigned long long)state[hart].address[0],
+                    gem5_qemu_jit_get_priv(hart));
+            return -1;
+        }
+        /* Migration can replace even the lower bound of a locked TOR. */
+        state[hart].address[0] += 8;
+        state[hart].address[1] += 8;
+        if (gem5_qemu_jit_set_pmp_state(hart, &state[hart], sizeof(actual))) {
+            return -1;
+        }
+    }
+    for (hart = 0; hart < 2; hart++) {
+        for (test = 0; test < 7; test++) {
+            invalid = state[hart];
+            switch (test) {
+            case 0: invalid.version++; break;
+            case 1: invalid.size--; break;
+            case 2: invalid.regions--; break;
+            case 3: invalid.reserved = 1; break;
+            case 4: invalid.regions = GEM5_QEMU_JIT_MAX_PMPS + 1; break;
+            case 5:
+                if (invalid.regions == GEM5_QEMU_JIT_MAX_PMPS) {
+                    continue;
+                }
+                invalid.address[invalid.regions] = 1;
+                break;
+            case 6:
+                if (invalid.regions == GEM5_QEMU_JIT_MAX_PMPS) {
+                    continue;
+                }
+                invalid.config[invalid.regions] = 1;
+                break;
+            }
+            if (gem5_qemu_jit_set_pmp_state(hart, &invalid, sizeof(invalid)) != -1 ||
+                gem5_qemu_jit_get_pmp_state(hart, &actual, sizeof(actual)) ||
+                memcmp(&actual, &state[hart], sizeof(actual))) {
+                return -1;
+            }
+        }
+        if (gem5_qemu_jit_set_pmp_state(hart, &saved[hart], sizeof(actual)) ||
+            gem5_qemu_jit_get_pmp_state(hart, &actual, sizeof(actual)) ||
+            memcmp(&actual, &saved[hart], sizeof(actual))) {
+            return -1;
+        }
+        gem5_qemu_jit_invalidate_translations(hart);
+    }
+    puts("PMP migration: locked TOR replacement and rejection atomicity passed");
+    return 0;
+}
+
+static int
 reservation_smoke(int profile_test)
 {
     /* lr.d x5,(x7); sc.d x6,x8,(x7) */
@@ -662,6 +735,10 @@ main(int argc, char **argv)
         }
     }
 
+    if (pmp_state_smoke()) {
+        fprintf(stderr, "PMP migration smoke failed\n");
+        return 1;
+    }
     if (reservation_smoke(profile_test)) {
         return 1;
     }

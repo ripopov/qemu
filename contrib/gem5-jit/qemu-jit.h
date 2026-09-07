@@ -95,6 +95,23 @@ typedef struct Gem5QemuJitRunResult {
 } Gem5QemuJitRunResult;
 
 #define GEM5_QEMU_JIT_VECTOR_STATE_VERSION 1
+#define GEM5_QEMU_JIT_PMP_STATE_VERSION 1
+#define GEM5_QEMU_JIT_MAX_PMPS 64
+/* Trusted migration state, not architectural CSR writes. Can replace locked
+ * entries. Only between runs; mseccfg is separate from this PMP table. */
+typedef struct Gem5QemuJitPmpState {
+    uint32_t version;
+    uint32_t size;
+    uint32_t regions;
+    uint32_t reserved;
+    uint64_t address[GEM5_QEMU_JIT_MAX_PMPS];
+    uint8_t config[GEM5_QEMU_JIT_MAX_PMPS];
+} Gem5QemuJitPmpState;
+GEM5_QEMU_JIT_API int gem5_qemu_jit_get_pmp_state(
+    uint32_t instance_id, Gem5QemuJitPmpState *state, size_t size);
+GEM5_QEMU_JIT_API int gem5_qemu_jit_set_pmp_state(
+    uint32_t instance_id, const Gem5QemuJitPmpState *state, size_t size);
+
 #define GEM5_QEMU_JIT_MAX_VLENB 128
 /* Migration state, not guest CSR accesses. Register bytes are little-endian;
  * bytes beyond vlenb in every register must be zero. VILL is separate from

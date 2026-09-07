@@ -66,8 +66,22 @@ failed SC after explicit invalidation or a different-value store by the other
 hart. This does not qualify all reservation-granule or eventual-progress rules.
 
 Embedded S/VS timers use an external-timer hook instead of QEMU's ACLINT
-timebase cast and native timer queue. `gem5_qemu_jit_refresh_timers` samples
-the host's `read_time`, updates hardware pending levels and returns versioned
+timebase cast and native timer queue.
+
+The versioned PMP table migration API bypasses architectural lock checks only
+for trusted host snapshots. It validates version, size, region count, reserved
+fields and unused entries before mutation, installs all raw address/config
+entries, recomputes TOR/NAPOT bounds and active-rule counts, and invalidates
+translation caches. `mseccfg` is separate state and is not transferred by this
+API. RVA23 backend CPUs explicitly enable PMP, including secondary harts:
+the profile CPU's defaults otherwise leave PMP CSR accesses unavailable.
+The smoke checks two-hart locked-TOR replacement, continued architectural
+write rejection, malformed-input rejection without mutation and restoration
+of the original table. It does not yet test execution permissions against
+the migrated bounds or provide a gem5-side consumer.
+
+`gem5_qemu_jit_refresh_timers` samples the host's `read_time`, updates hardware
+pending levels and returns versioned
 time/compare/offset/gate metadata. The host must schedule its next deadline
 and cap execution batches accordingly. Timer-control writes request an early
 batch boundary so a newly programmed deadline can be scheduled before more

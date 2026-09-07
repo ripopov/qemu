@@ -318,7 +318,7 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks,
     };
 
     if (config->profile == GEM5_QEMU_JIT_PROFILE_RVA23S64) {
-        snprintf(profile_cpu, sizeof(profile_cpu), "rva23s64,vlen=%u",
+        snprintf(profile_cpu, sizeof(profile_cpu), "rva23s64,pmp=true,vlen=%u",
                  config->vlenb * 8);
         argv[4] = profile_cpu;
     }
@@ -333,6 +333,9 @@ jit_global_init(const Gem5QemuJitCallbacks *callbacks,
         /* QEMU tracks implied-extension realization by hart ID. Assign a
          * unique internal ID before realizing, not only afterwards. */
         RISCV_CPU(next)->env.mhartid = index;
+        if (config->profile == GEM5_QEMU_JIT_PROFILE_RVA23S64) {
+            object_property_set_bool(OBJECT(next), "pmp", true, &error_abort);
+        }
         object_property_set_int(OBJECT(next), "vlen", config->vlenb * 8,
                                 &error_abort);
         if (!qdev_realize(DEVICE(next), NULL, &error_abort)) {
@@ -683,6 +686,62 @@ gem5_qemu_jit_set_vector_state(uint32_t instance_id,
     env->vxsat = state->vxsat;
     env->vill = state->vill;
     env->vtype = state->vtype;
+    return 0;
+}
+
+int
+gem5_qemu_jit_get_pmp_state(uint32_t instance_id,
+                          Gem5QemuJitPmpState *state, size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    unsigned i;
+    if (!hart || hart->running || !state || size != sizeof(*state) ||
+        hart->riscv_cpu->cfg.pmp_regions > GEM5_QEMU_JIT_MAX_PMPS) {
+        return -1;
+    }
+    memset(state, 0, sizeof(*state));
+    state->version = GEM5_QEMU_JIT_PMP_STATE_VERSION;
+    state->size = sizeof(*state);
+    state->regions = hart->riscv_cpu->cfg.pmp_regions;
+    for (i = 0; i < state->regions; i++) {
+        state->address[i] = hart->riscv_cpu->env.pmp_state.pmp[i].addr_reg;
+        state->config[i] = hart->riscv_cpu->env.pmp_state.pmp[i].cfg_reg;
+    }
+    return 0;
+}
+
+int
+gem5_qemu_jit_set_pmp_state(uint32_t instance_id,
+                          const Gem5QemuJitPmpState *state, size_t size)
+{
+    Gem5QemuJitHart *hart = jit_hart(instance_id);
+    CPURISCVState *env;
+    unsigned i;
+    if (!hart || hart->running || !state || size != sizeof(*state) ||
+        state->version != GEM5_QEMU_JIT_PMP_STATE_VERSION ||
+        state->size != sizeof(*state) || state->reserved ||
+        state->regions > GEM5_QEMU_JIT_MAX_PMPS ||
+        state->regions != hart->riscv_cpu->cfg.pmp_regions) {
+        return -1;
+    }
+    for (i = state->regions; i < GEM5_QEMU_JIT_MAX_PMPS; i++) {
+        if (state->address[i] || state->config[i]) {
+            return -1;
+        }
+    }
+    env = &hart->riscv_cpu->env;
+    /* Install the whole table before deriving TOR bounds from predecessors.
+     * Architectural CSR accessors cannot restore locked or stale entries. */
+    for (i = 0; i < state->regions; i++) {
+        env->pmp_state.pmp[i].addr_reg = state->address[i];
+        env->pmp_state.pmp[i].cfg_reg = state->config[i];
+    }
+    for (i = 0; i < state->regions; i++) {
+        pmp_update_rule_addr(env, i);
+    }
+    pmp_update_rule_nums(env);
+    tlb_flush(hart->cpu);
+    queue_tb_flush(hart->cpu);
     return 0;
 }
 
