@@ -438,6 +438,93 @@ pmp_state_smoke(void)
 }
 
 static int
+pmp_execution_smoke(void)
+{
+    /* ld x5,0(x7); marker; sd x8,0(x7); marker; trap marker */
+    const uint32_t program[] = {
+        0x0003b283, 0x0000007b, 0x0083b023, 0x0000007b, 0x0000007b
+    };
+    const unsigned csrs[] = {0x300, 0x305, 0x341, 0x342, 0x343};
+    Gem5QemuJitPmpState saved, state;
+    Gem5QemuJitRunResult result;
+    uint64_t saved_csr[5], cause, epc, tval;
+    unsigned hart, mode, store, phase, i;
+    memcpy(memory + 224, program, sizeof(program));
+    for (hart = 0; hart < 2; hart++) {
+        if (gem5_qemu_jit_get_pmp_state(hart, &saved, sizeof(saved)) ||
+            saved.regions < 3) {
+            return -1;
+        }
+        for (i = 0; i < 5; i++) {
+            if (gem5_qemu_jit_get_csr(hart, csrs[i], &saved_csr[i])) {
+                return -1;
+            }
+        }
+        for (mode = 1; mode <= 3; mode += 2) {
+            for (store = 0; store < 2; store++) {
+                for (phase = 0; phase < 4; phase++) {
+                    unsigned pc = store ? 232 : 224;
+                    int denied = phase == 1;
+                    state = saved;
+                    memset(state.address, 0, sizeof(state.address));
+                    memset(state.config, 0, sizeof(state.config));
+                    state.address[0] = phase == 3 ? 258 : 256;
+                    state.address[1] = 272;
+                    state.config[1] = phase == 0 || phase == 2 ? 0x8b : 0x88;
+                    /* Low-priority 4 KiB RWX NAPOT permits S-mode code
+                     * and accesses outside the first locked TOR range. */
+                    state.address[2] = 511;
+                    state.config[2] = 0x1f;
+                    memset(memory + 1024, 0, 8);
+                    memory[1024] = 17;
+                    if (gem5_qemu_jit_set_priv(hart, 3) ||
+                        gem5_qemu_jit_set_csr(hart, 0x300,
+                            saved_csr[0] & ~((1ULL << 17) | 0xa)) ||
+                        gem5_qemu_jit_set_csr(hart, 0x305, 240) ||
+                        gem5_qemu_jit_set_csr(hart, 0x342, 0) ||
+                        gem5_qemu_jit_set_pmp_state(hart, &state, sizeof(state)) ||
+                        gem5_qemu_jit_set_gpr(hart, 5, 99) ||
+                        gem5_qemu_jit_set_gpr(hart, 7, 1024) ||
+                        gem5_qemu_jit_set_gpr(hart, 8, 42) ||
+                        gem5_qemu_jit_set_priv(hart, mode)) {
+                        return -1;
+                    }
+                    gem5_qemu_jit_set_pc(hart, pc);
+                    /* No explicit invalidation: the migration setter must
+                     * revoke the cached permissions from the previous run. */
+                    if (gem5_qemu_jit_run(hart, 8, &result) ||
+                        result.reason != GEM5_QEMU_JIT_EXIT_M5OP ||
+                        gem5_qemu_jit_set_priv(hart, 3) ||
+                        gem5_qemu_jit_get_csr(hart, 0x342, &cause) ||
+                        gem5_qemu_jit_get_csr(hart, 0x341, &epc) ||
+                        gem5_qemu_jit_get_csr(hart, 0x343, &tval) ||
+                        cause != (denied ? (store ? 7 : 5) : 0) ||
+                        (denied && (epc != pc || tval != 1024)) ||
+                        memory[1024] != (store && !denied ? 42 : 17) ||
+                        (!store && gem5_qemu_jit_get_gpr(hart, 5) !=
+                            (denied ? 99 : 17))) {
+                        fprintf(stderr, "PMP execution hart=%u mode=%u store=%u phase=%u\n",
+                                hart, mode, store, phase);
+                        return -1;
+                    }
+                }
+            }
+        }
+        if (gem5_qemu_jit_set_pmp_state(hart, &saved, sizeof(saved))) {
+            return -1;
+        }
+        for (i = 0; i < 5; i++) {
+            if (gem5_qemu_jit_set_csr(hart, csrs[i], saved_csr[i])) {
+                return -1;
+            }
+        }
+        gem5_qemu_jit_invalidate_translations(hart);
+    }
+    puts("PMP execution: S/M loads/stores, revocation and moved TOR bounds passed");
+    return 0;
+}
+
+static int
 reservation_smoke(int profile_test)
 {
     /* lr.d x5,(x7); sc.d x6,x8,(x7) */
@@ -737,6 +824,9 @@ main(int argc, char **argv)
 
     if (pmp_state_smoke()) {
         fprintf(stderr, "PMP migration smoke failed\n");
+        return 1;
+    }
+    if (pmp_execution_smoke()) {
         return 1;
     }
     if (reservation_smoke(profile_test)) {

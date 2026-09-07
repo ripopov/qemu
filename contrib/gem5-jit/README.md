@@ -77,8 +77,13 @@ API. RVA23 backend CPUs explicitly enable PMP, including secondary harts:
 the profile CPU's defaults otherwise leave PMP CSR accesses unavailable.
 The smoke checks two-hart locked-TOR replacement, continued architectural
 write rejection, malformed-input rejection without mutation and restoration
-of the original table. It does not yet test execution permissions against
-the migrated bounds or provide a gem5-side consumer.
+of the original table. A 32-case execution matrix covers both harts, S/M
+loads and stores, locked TOR allow/deny/allow transitions, and moving the
+lower bound past the accessed address into a lower-priority NAPOT region.
+It checks access-fault cause, EPC, trap address, load destination and memory
+effects without explicit test-side invalidation between permission changes.
+Instruction-fetch permissions, other PMP modes and a gem5-side consumer
+remain to be qualified.
 
 `gem5_qemu_jit_refresh_timers` samples the host's `read_time`, updates hardware
 pending levels and returns versioned
