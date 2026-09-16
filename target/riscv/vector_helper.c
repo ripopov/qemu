@@ -729,6 +729,11 @@ ProbeSuccess:
     /* load bytes from guest memory */
     if (vl != 0) {
         env->vl = vl;
+        /*
+         * The first-page count was computed before fault-only-first
+         * shortened vl. Never load elements beyond the new vl.
+         */
+        elems = MIN(elems, env->vl - env->vstart);
     }
 
     if (env->vstart < env->vl) {

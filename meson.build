@@ -4396,6 +4396,27 @@ foreach target : target_dirs
                  c_args: c_args,
                  build_by_default: false)
 
+  if target == 'riscv64-softmmu'
+    gem5_jit_lib = shared_library(
+      'gem5-qemu-jit', files('contrib/gem5-jit/qemu-jit.c'),
+      name_prefix: 'lib',
+      install: false,
+      include_directories: target_inc,
+      c_args: c_args,
+      dependencies: arch_deps,
+      objects: lib.extract_all_objects(recursive: true),
+      link_depends: [block_syms, qemu_syms],
+      link_args: link_args)
+    gem5_jit_smoke = executable(
+      'gem5-qemu-jit-smoke', files('contrib/gem5-jit/qemu-jit-smoke.c'),
+      link_with: gem5_jit_lib,
+      install: false)
+    foreach harts : ['1', '2', '4']
+      test('gem5-qemu-jit-smoke-' + harts, gem5_jit_smoke,
+           args: [harts], suite: ['unit', 'gem5-jit'])
+    endforeach
+  endif
+
   if target.endswith('-softmmu')
     execs = [{
       'name': 'qemu-system-' + target_name,

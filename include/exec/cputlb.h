@@ -26,6 +26,7 @@
 #include "exec/vaddr.h"
 
 #if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
+G_NORETURN void cpu_io_recompile(CPUState *cpu, uintptr_t retaddr);
 void tlb_protect_code(ram_addr_t ram_addr);
 void tlb_unprotect_code(ram_addr_t ram_addr);
 #endif

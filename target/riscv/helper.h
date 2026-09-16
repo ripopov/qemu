@@ -1,5 +1,8 @@
 /* Exceptions */
 DEF_HELPER_2(raise_exception, noreturn, env, i32)
+#ifndef CONFIG_USER_ONLY
+DEF_HELPER_1(gem5_fence_i, noreturn, env)
+#endif
 
 /* Floating Point - rounding mode */
 DEF_HELPER_FLAGS_2(set_rounding_mode, TCG_CALL_NO_WG, void, env, i32)
@@ -1287,5 +1290,7 @@ DEF_HELPER_4(vsm4r_vs, void, ptr, ptr, env, i32)
 
 /* CFI (zicfiss) helpers */
 #ifndef CONFIG_USER_ONLY
+DEF_HELPER_4(gem5_lr, tl, env, tl, i32, i32)
+DEF_HELPER_5(gem5_sc, tl, env, tl, tl, i32, i32)
 DEF_HELPER_1(ssamoswap_disabled, void, env)
 #endif

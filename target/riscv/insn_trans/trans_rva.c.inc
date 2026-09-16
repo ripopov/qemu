@@ -39,6 +39,17 @@ static bool gen_lr(DisasContext *ctx, arg_atomic *a, MemOp mop)
 
     decode_save_opc(ctx, 0);
     src1 = get_address(ctx, a->rs1, 0);
+#ifndef CONFIG_USER_ONLY
+    if (riscv_gem5_jit_enabled) {
+        TCGv dest = dest_gpr(ctx, a->rd);
+        translator_io_start(&ctx->base);
+        gen_helper_gem5_lr(dest, tcg_env, src1,
+                           tcg_constant_i32(memop_size(mop)),
+                           tcg_constant_i32(ctx->mem_idx));
+        gen_set_gpr(ctx, a->rd, dest);
+        return true;
+    }
+#endif
     if (a->rl) {
         tcg_gen_mb(TCG_MO_ALL | TCG_BAR_STRL);
     }
@@ -69,6 +80,18 @@ static bool gen_sc(DisasContext *ctx, arg_atomic *a, MemOp mop)
 
     decode_save_opc(ctx, 0);
     src1 = get_address(ctx, a->rs1, 0);
+#ifndef CONFIG_USER_ONLY
+    if (riscv_gem5_jit_enabled) {
+        dest = dest_gpr(ctx, a->rd);
+        src2 = get_gpr(ctx, a->rs2, EXT_NONE);
+        translator_io_start(&ctx->base);
+        gen_helper_gem5_sc(dest, tcg_env, src1, src2,
+                           tcg_constant_i32(memop_size(mop)),
+                           tcg_constant_i32(ctx->mem_idx));
+        gen_set_gpr(ctx, a->rd, dest);
+        return true;
+    }
+#endif
     tcg_gen_brcond_tl(TCG_COND_NE, load_res, src1, l1);
 
     /*

@@ -1737,7 +1737,8 @@ void riscv_cpu_do_unaligned_access(CPUState *cs, vaddr addr,
 }
 
 
-static void pmu_tlb_fill_incr_ctr(RISCVCPU *cpu, MMUAccessType access_type)
+static void pmu_tlb_fill_incr_ctr(RISCVCPU *cpu, MMUAccessType access_type,
+                                 uintptr_t retaddr)
 {
     enum riscv_pmu_event_idx pmu_event_type;
 
@@ -1755,7 +1756,7 @@ static void pmu_tlb_fill_incr_ctr(RISCVCPU *cpu, MMUAccessType access_type)
         return;
     }
 
-    riscv_pmu_incr_ctr(cpu, pmu_event_type);
+    riscv_pmu_incr_ctr(cpu, pmu_event_type, retaddr);
 }
 
 bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
@@ -1781,7 +1782,7 @@ bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
     qemu_log_mask(CPU_LOG_MMU, "%s ad %" VADDR_PRIx " rw %d mmu_idx %d\n",
                   __func__, address, access_type, mmu_idx);
 
-    pmu_tlb_fill_incr_ctr(cpu, access_type);
+    pmu_tlb_fill_incr_ctr(cpu, access_type, retaddr);
     if (two_stage_lookup) {
         /* Two stage lookup */
         ret = get_physical_address(env, &pa, &prot, address,
@@ -2113,6 +2114,9 @@ static target_ulong riscv_transformed_insn(CPURISCVState *env,
 static target_ulong promote_load_fault(target_ulong orig_cause)
 {
     switch (orig_cause) {
+    case RISCV_EXCP_LOAD_ADDR_MIS:
+        return RISCV_EXCP_STORE_AMO_ADDR_MIS;
+
     case RISCV_EXCP_LOAD_GUEST_ACCESS_FAULT:
         return RISCV_EXCP_STORE_GUEST_AMO_ACCESS_FAULT;
 
@@ -2150,6 +2154,8 @@ static void riscv_do_nmi(CPURISCVState *env, target_ulong cause, bool virt)
  * Adapted from Spike's processor_t::take_trap.
  *
  */
+void (*riscv_gem5_jit_fault)(CPUState *, bool);
+
 void riscv_cpu_do_interrupt(CPUState *cs)
 {
     RISCVCPU *cpu = RISCV_CPU(cs);
@@ -2193,6 +2199,19 @@ void riscv_cpu_do_interrupt(CPUState *cs)
     }
 
     if (!async) {
+        /*
+         * Instruction-fetch failures happen during translation, before
+         * icount charges an instruction. Other architectural exceptions
+         * abort an attempted instruction, which must not retire.
+         */
+        if (riscv_gem5_jit_fault &&
+            cause != RISCV_EXCP_INST_ACCESS_FAULT &&
+            cause != RISCV_EXCP_INST_PAGE_FAULT &&
+            cause != RISCV_EXCP_INST_GUEST_PAGE_FAULT &&
+            cause != RISCV_EXCP_SEMIHOST) {
+            riscv_gem5_jit_fault(cs, cpu->gem5_fault_charged);
+        }
+        cpu->gem5_fault_charged = false;
         /* set tval to badaddr for traps with address information */
         switch (cause) {
 #ifdef CONFIG_TCG

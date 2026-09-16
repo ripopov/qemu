@@ -23,9 +23,13 @@
 #include "cpu.h"
 #include "pmu.h"
 #include "exec/icount.h"
+#include "exec/cputlb.h"
 #include "system/device_tree.h"
 
 #define RISCV_TIMEBASE_FREQ 1000000000 /* 1Ghz */
+
+uint64_t (*riscv_gem5_jit_instret)(CPUState *, bool);
+uint64_t (*riscv_gem5_jit_cycles)(CPUState *);
 
 /*
  * To keep it simple, any event can be mapped to any programmable counters in
@@ -197,7 +201,9 @@ static void riscv_pmu_icount_update_priv(CPURISCVState *env,
     uint64_t *counter_arr;
     uint64_t delta;
 
-    if (icount_enabled()) {
+    if (riscv_gem5_jit_instret) {
+        current_icount = riscv_gem5_jit_instret(env_cpu(env), false);
+    } else if (icount_enabled()) {
         current_icount = icount_get_raw();
     } else {
         current_icount = cpu_get_host_ticks();
@@ -237,7 +243,9 @@ static void riscv_pmu_cycle_update_priv(CPURISCVState *env,
     uint64_t *counter_arr;
     uint64_t delta;
 
-    if (icount_enabled()) {
+    if (riscv_gem5_jit_cycles) {
+        current_ticks = riscv_gem5_jit_cycles(env_cpu(env));
+    } else if (icount_enabled()) {
         current_ticks = icount_get();
     } else {
         current_ticks = cpu_get_host_ticks();
@@ -270,9 +278,14 @@ void riscv_pmu_update_fixed_ctrs(CPURISCVState *env, target_ulong newpriv,
 {
     riscv_pmu_cycle_update_priv(env, newpriv, new_virt);
     riscv_pmu_icount_update_priv(env, newpriv, new_virt);
+    if (riscv_gem5_jit_cycles && newpriv != env->priv) {
+        /* Privilege filters can change which overflow deadline is active. */
+        cpu_exit(env_cpu(env));
+    }
 }
 
-int riscv_pmu_incr_ctr(RISCVCPU *cpu, enum riscv_pmu_event_idx event_idx)
+int riscv_pmu_incr_ctr(RISCVCPU *cpu, enum riscv_pmu_event_idx event_idx,
+                       uintptr_t retaddr)
 {
     uint32_t ctr_idx;
     int ret;
@@ -280,6 +293,29 @@ int riscv_pmu_incr_ctr(RISCVCPU *cpu, enum riscv_pmu_event_idx event_idx)
     gpointer value;
 
     if (!cpu->cfg.pmu_mask) {
+        return 0;
+    }
+    if (riscv_gem5_jit_cycles) {
+        /* Replay at an I/O boundary before any counter side effects. */
+        if (!CPU(cpu)->neg.can_do_io) {
+            for (uint32_t mask = cpu->pmu_avail_ctrs; mask;
+                 mask &= mask - 1) {
+                unsigned ctr = ctz32(mask);
+                if (riscv_pmu_counter_enabled(cpu, ctr) &&
+                    (env->mhpmevent_val[ctr] & MHPMEVENT_IDX_MASK) ==
+                    event_idx) {
+                    cpu_io_recompile(CPU(cpu), retaddr);
+                }
+            }
+        }
+        /* Multiple programmable counters may select the same event. */
+        for (uint32_t mask = cpu->pmu_avail_ctrs; mask; mask &= mask - 1) {
+            unsigned ctr = ctz32(mask);
+            if (riscv_pmu_counter_enabled(cpu, ctr) &&
+                (env->mhpmevent_val[ctr] & MHPMEVENT_IDX_MASK) == event_idx) {
+                riscv_pmu_incr_ctr_rv64(cpu, ctr);
+            }
+        }
         return 0;
     }
     value = g_hash_table_lookup(cpu->pmu_event_ctr_map,
@@ -313,6 +349,11 @@ bool riscv_pmu_ctr_monitor_instructions(CPURISCVState *env,
     if (target_ctr == 2) {
         return true;
     }
+    if (riscv_gem5_jit_cycles) {
+        return target_ctr >= 3 &&
+            (env->mhpmevent_val[target_ctr] & MHPMEVENT_IDX_MASK) ==
+            RISCV_PMU_EVENT_HW_INSTRUCTIONS;
+    }
 
     cpu = env_archcpu(env);
     if (!cpu->pmu_event_ctr_map) {
@@ -338,6 +379,11 @@ bool riscv_pmu_ctr_monitor_cycles(CPURISCVState *env, uint32_t target_ctr)
     /* Fixed mcycle counter */
     if (target_ctr == 0) {
         return true;
+    }
+    if (riscv_gem5_jit_cycles) {
+        return target_ctr >= 3 &&
+            (env->mhpmevent_val[target_ctr] & MHPMEVENT_IDX_MASK) ==
+            RISCV_PMU_EVENT_HW_CPU_CYCLES;
     }
 
     cpu = env_archcpu(env);
@@ -384,6 +430,17 @@ int riscv_pmu_update_event_map(CPURISCVState *env, uint64_t value,
 
     if (!riscv_pmu_counter_valid(cpu, ctr_idx) || !cpu->pmu_event_ctr_map) {
         return -1;
+    }
+    if (riscv_gem5_jit_cycles) {
+        env->pmu_ctrs[ctr_idx].gem5_last_valid = false;
+        cpu->gem5_pmu_active &= ~BIT(ctr_idx);
+        event_idx = value & MHPMEVENT_IDX_MASK;
+        if (event_idx == RISCV_PMU_EVENT_HW_CPU_CYCLES ||
+            event_idx == RISCV_PMU_EVENT_HW_INSTRUCTIONS) {
+            cpu->gem5_pmu_active |= BIT(ctr_idx);
+        }
+        cpu_exit(env_cpu(env));
+        return 0;
     }
 
     /*
@@ -519,6 +576,55 @@ static void pmu_timer_trigger_irq(RISCVCPU *cpu,
     }
 }
 
+/*
+ * The embedded host polls at execution/privilege boundaries and schedules
+ * the returned cycle deadline independently of whether the hart is asleep.
+ * Instruction deadlines instead limit that hart's execution budget.
+ */
+void riscv_pmu_gem5_poll(CPURISCVState *env, uint64_t *cycles,
+                         uint64_t *instructions)
+{
+    RISCVCPU *cpu = env_archcpu(env);
+    uint64_t inhibit = env->priv == PRV_M ? MHPMEVENT_BIT_MINH :
+                       env->priv == PRV_S ? MHPMEVENT_BIT_SINH :
+                                            MHPMEVENT_BIT_UINH;
+
+    *cycles = *instructions = UINT64_MAX;
+    if (!cpu->cfg.ext_sscofpmf || !cpu->gem5_pmu_active) {
+        return;
+    }
+    assert(riscv_cpu_mxl(env) == MXL_RV64 && !env->virt_enabled);
+    for (uint32_t mask = cpu->gem5_pmu_active; mask; mask &= mask - 1) {
+        unsigned ctr = ctz32(mask);
+        PMUCTRState *counter = &env->pmu_ctrs[ctr];
+        target_ulong value;
+
+        if (!riscv_pmu_counter_enabled(cpu, ctr) ||
+            pmu_hpmevent_is_of_set(env, ctr)) {
+            continue;
+        }
+        riscv_pmu_read_ctr(env, &value, false, ctr);
+        if (counter->gem5_last_valid && value < counter->gem5_last_value) {
+            if (pmu_hpmevent_set_of_if_clear(env, ctr)) {
+                riscv_cpu_update_mip(env, MIP_LCOFIP, BOOL_TO_MASK(1));
+            }
+        } else if (!(env->mhpmevent_val[ctr] & inhibit)) {
+            /*
+             * Zero needs 2^64 increments; use the largest representable
+             * intermediate deadline and observe again before wrapping.
+             */
+            uint64_t remaining = value ? -value : UINT64_MAX;
+            if (riscv_pmu_ctr_monitor_cycles(env, ctr)) {
+                *cycles = MIN(*cycles, remaining);
+            } else {
+                *instructions = MIN(*instructions, remaining);
+            }
+        }
+        counter->gem5_last_value = value;
+        counter->gem5_last_valid = true;
+    }
+}
+
 /* Timer callback for instret and cycle counter overflow */
 void riscv_pmu_timer_cb(void *priv)
 {
@@ -540,6 +646,12 @@ int riscv_pmu_setup_timer(CPURISCVState *env, uint64_t value, uint32_t ctr_idx)
     if (!riscv_pmu_counter_valid(cpu, ctr_idx) || !cpu->cfg.ext_sscofpmf ||
         pmu_hpmevent_is_of_set(env, ctr_idx)) {
         return -1;
+    }
+    if (riscv_gem5_jit_cycles) {
+        counter->gem5_last_value = value;
+        counter->gem5_last_valid = true;
+        cpu_exit(env_cpu(env));
+        return 0;
     }
 
     if (value) {

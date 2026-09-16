@@ -957,11 +957,16 @@ static bool trans_fence_i(DisasContext *ctx, arg_fence_i *a)
         return false;
     }
 
-    /*
-     * FENCE_I is a no-op in QEMU,
-     * however we need to end the translation block
-     */
     gen_update_pc(ctx, ctx->cur_insn_len);
+#ifndef CONFIG_USER_ONLY
+    if (riscv_gem5_jit_enabled) {
+        translator_io_start(&ctx->base);
+        gen_helper_gem5_fence_i(tcg_env);
+        ctx->base.is_jmp = DISAS_NORETURN;
+        return true;
+    }
+#endif
+    /* Native QEMU observes all stores, so ending the TB is sufficient. */
     exit_tb(ctx);
     ctx->base.is_jmp = DISAS_NORETURN;
     return true;

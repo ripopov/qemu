@@ -1173,12 +1173,20 @@ static RISCVException read_mhpmevent(CPURISCVState *env, int csrno,
     return RISCV_EXCP_NONE;
 }
 
+static RISCVException riscv_pmu_write_ctr(CPURISCVState *env, target_ulong val,
+                                          uint32_t ctr_idx);
+
 static RISCVException write_mhpmevent(CPURISCVState *env, int csrno,
                                       target_ulong val, uintptr_t ra)
 {
     int evt_index = csrno - CSR_MCOUNTINHIBIT;
     uint64_t mhpmevt_val = val;
     uint64_t inh_avail_mask;
+    target_ulong saved_counter = 0;
+
+    if (riscv_gem5_jit_cycles) {
+        riscv_pmu_read_ctr(env, &saved_counter, false, evt_index);
+    }
 
     if (riscv_cpu_mxl(env) == MXL_RV32) {
         env->mhpmevent_val[evt_index] = val;
@@ -1197,6 +1205,13 @@ static RISCVException write_mhpmevent(CPURISCVState *env, int csrno,
     }
 
     riscv_pmu_update_event_map(env, mhpmevt_val, evt_index);
+    if (riscv_gem5_jit_cycles) {
+        /*
+         * Changing an event or privilege filter must not reinterpret the
+         * accumulated count using the new source's old snapshot.
+         */
+        riscv_pmu_write_ctr(env, saved_counter, evt_index);
+    }
 
     return RISCV_EXCP_NONE;
 }
@@ -1261,7 +1276,11 @@ static target_ulong riscv_pmu_ctr_get_fixed_counters_val(CPURISCVState *env,
     }
 
     if (!cfg_val) {
-        if (icount_enabled()) {
+        if (inst && riscv_gem5_jit_instret) {
+            curr_val = riscv_gem5_jit_instret(env_cpu(env), false);
+        } else if (!inst && riscv_gem5_jit_cycles) {
+            curr_val = riscv_gem5_jit_cycles(env_cpu(env));
+        } else if (icount_enabled()) {
                 curr_val = inst ? icount_get_raw() : icount_get();
         } else {
             curr_val = cpu_get_host_ticks();
@@ -1407,6 +1426,7 @@ static RISCVException read_hpmcounter(CPURISCVState *env, int csrno,
                                       target_ulong *val)
 {
     uint16_t ctr_index;
+    RISCVException result;
 
     if (csrno >= CSR_MCYCLE && csrno <= CSR_MHPMCOUNTER31) {
         ctr_index = csrno - CSR_MCYCLE;
@@ -1416,7 +1436,28 @@ static RISCVException read_hpmcounter(CPURISCVState *env, int csrno,
         return RISCV_EXCP_ILLEGAL_INST;
     }
 
-    return riscv_pmu_read_ctr(env, val, false, ctr_index);
+    result = riscv_pmu_read_ctr(env, val, false, ctr_index);
+    if (riscv_gem5_jit_instret &&
+        riscv_pmu_ctr_monitor_instructions(env, ctr_index) &&
+        !(env->mcountinhibit & BIT(ctr_index))) {
+        uint64_t filter = ctr_index == 2 ? env->minstretcfg :
+                                          env->mhpmevent_val[ctr_index];
+        uint64_t inhibit = env->priv == PRV_M ? MHPMEVENT_BIT_MINH :
+                           env->priv == PRV_S ? MHPMEVENT_BIT_SINH :
+                                                MHPMEVENT_BIT_UINH;
+
+        /*
+         * TCG charges the current CSR before its helper runs. Reads see
+         * only completed instructions; writes keep the through-current
+         * snapshot, so the write itself does not increment the counter.
+         * The embedded configuration supports MSU, not virtualization.
+         */
+        if (!(filter & inhibit)) {
+            *val -= riscv_gem5_jit_instret(env_cpu(env), false) -
+                    riscv_gem5_jit_instret(env_cpu(env), true);
+        }
+    }
+    return result;
 }
 
 static RISCVException read_hpmcounterh(CPURISCVState *env, int csrno,

@@ -20,6 +20,9 @@
 #ifndef RISCV_CPU_H
 #define RISCV_CPU_H
 
+/* Enabled only by the embedded gem5 adapter, before translating code. */
+extern bool riscv_gem5_jit_enabled;
+
 #include "hw/core/cpu.h"
 #include "hw/registerfields.h"
 #include "hw/qdev-properties.h"
@@ -36,6 +39,14 @@
 #include "cpu-qom.h"
 
 typedef struct CPUArchState CPURISCVState;
+
+#ifndef CONFIG_USER_ONLY
+extern uint64_t (*riscv_gem5_jit_instret)(CPUState *, bool before_instruction);
+extern uint64_t (*riscv_gem5_jit_cycles)(CPUState *);
+extern void (*riscv_gem5_jit_fault)(CPUState *, bool);
+extern int (*riscv_gem5_jit_reservation)(CPUState *, uint64_t, uint64_t,
+                                       unsigned, int, uint64_t *);
+#endif
 
 #define CPU_RESOLVING_TYPE TYPE_RISCV_CPU
 
@@ -205,6 +216,9 @@ typedef struct PMUCTRState {
     target_ulong mhpmcounterh_prev;
     /* Value beyond UINT32_MAX/UINT64_MAX before overflow interrupt trigger */
     target_ulong irq_overflow_left;
+    /* Embedded host scheduler's last overflow observation (not guest state). */
+    uint64_t gem5_last_value;
+    bool gem5_last_valid;
 } PMUCTRState;
 
 typedef struct PMUFixedCtrState {
@@ -550,6 +564,8 @@ struct ArchCPU {
     QEMUTimer *pmu_timer;
     /* A bitmask of Available programmable counters */
     uint32_t pmu_avail_ctrs;
+    uint32_t gem5_pmu_active;
+    bool gem5_fault_charged;
     /* Mapping of events to counters */
     GHashTable *pmu_event_ctr_map;
     const GPtrArray *decoders;

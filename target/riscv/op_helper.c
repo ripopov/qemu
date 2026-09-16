@@ -26,9 +26,68 @@
 #include "accel/tcg/probe.h"
 #include "exec/helper-proto.h"
 #include "exec/tlb-flags.h"
+#include "exec/target_page.h"
+#include "exec/tb-flush.h"
 #include "trace.h"
 
 #ifndef CONFIG_USER_ONLY
+void helper_gem5_fence_i(CPURISCVState *env)
+{
+    CPUState *cpu = env_cpu(env);
+
+    /*
+     * Host/device writes need not pass through QEMU's code invalidation.
+     * Flush outside translated execution, before this hart runs again.
+     */
+    queue_tb_flush(cpu);
+    cpu->exception_index = EXCP_INTERRUPT;
+    cpu_loop_exit(cpu);
+}
+
+int (*riscv_gem5_jit_reservation)(CPUState *, uint64_t, uint64_t,
+                                 unsigned, int, uint64_t *);
+
+static target_ulong gem5_reservation(CPURISCVState *env, target_ulong addr,
+                                     target_ulong value, unsigned size,
+                                     int mmu_idx, bool store, uintptr_t ra)
+{
+    CPUTLBEntryFull *full;
+    void *host;
+    uint64_t result;
+    hwaddr physical;
+
+    if (addr & (size - 1)) {
+        env->badaddr = addr;
+        riscv_raise_exception(env, store ? RISCV_EXCP_STORE_AMO_ADDR_MIS :
+                              RISCV_EXCP_LOAD_ADDR_MIS, ra);
+    }
+    /* QEMU alone translates and enforces paging and PMP permissions. */
+    probe_access_full(env, addr, size,
+                      store ? MMU_DATA_STORE : MMU_DATA_LOAD,
+                      mmu_idx, false, &host, &full, ra);
+    physical = full->phys_addr | (addr & ~TARGET_PAGE_MASK);
+    if (riscv_gem5_jit_reservation(env_cpu(env), physical, value, size,
+                                   store, &result)) {
+        env->badaddr = addr;
+        riscv_raise_exception(env, store ? RISCV_EXCP_STORE_AMO_ACCESS_FAULT :
+                              RISCV_EXCP_LOAD_ACCESS_FAULT, ra);
+    }
+    return store || size == 8 ? result : (target_long)(int32_t)result;
+}
+
+target_ulong HELPER(gem5_lr)(CPURISCVState *env, target_ulong addr,
+                             uint32_t size, uint32_t mmu_idx)
+{
+    return gem5_reservation(env, addr, 0, size, mmu_idx, false, GETPC());
+}
+
+target_ulong HELPER(gem5_sc)(CPURISCVState *env, target_ulong addr,
+                             target_ulong value, uint32_t size,
+                             uint32_t mmu_idx)
+{
+    return gem5_reservation(env, addr, value, size, mmu_idx, true, GETPC());
+}
+
 static inline MemOp mo_endian_env(CPURISCVState *env)
 {
     /*
@@ -54,6 +113,10 @@ G_NORETURN void riscv_raise_exception(CPURISCVState *env,
                           env->pc);
 
     cs->exception_index = exception;
+    if (riscv_gem5_jit_fault) {
+        /* Restoring a helper's return PC also refunds the faulting insn. */
+        env_archcpu(env)->gem5_fault_charged = pc == 0;
+    }
     cpu_loop_exit_restore(cs, pc);
 }
 
