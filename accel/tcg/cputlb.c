@@ -47,6 +47,7 @@
 #include "tb-internal.h"
 #include "tlb-bounds.h"
 #include "internal-common.h"
+#include "system/gem5-jit.h"
 #ifdef CONFIG_PLUGIN
 #include "qemu/plugin-memory.h"
 #endif
@@ -1332,6 +1333,8 @@ static bool victim_tlb_hit(CPUState *cpu, size_t mmu_idx, size_t index,
     return false;
 }
 
+bool (*gem5_jit_store_hook)(ram_addr_t ram_addr, unsigned size);
+
 static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
                            CPUTLBEntryFull *full, uintptr_t retaddr)
 {
@@ -1341,6 +1344,15 @@ static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
 
     if (!physical_memory_get_dirty_flag(ram_addr, DIRTY_MEMORY_CODE)) {
         tb_invalidate_phys_range_fast(cpu, ram_addr, size, retaddr);
+    }
+
+    /*
+     * gem5 co-simulation: while gem5 wants to observe stores it keeps RAM
+     * pages clean for the VGA client; the hook reports the store and asks
+     * to leave the page clean so the next store is reported too.
+     */
+    if (gem5_jit_store_hook && gem5_jit_store_hook(ram_addr, size)) {
+        return;
     }
 
     /*

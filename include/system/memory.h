@@ -1656,6 +1656,34 @@ bool memory_region_init_rom_device_nomigrate(MemoryRegion *mr,
  * @name: used for debugging; not visible to the user or ABI
  * @size: size of the region.
  */
+/**
+ * memory_region_init_rom_device_ptr:  Initialize a ROM memory region from
+ *                                     a user-provided pointer. Reads are
+ *                                     served from the pointer, writes are
+ *                                     handled via callbacks.
+ *
+ * Like memory_region_init_rom_device_nomigrate(), but the RAM block is
+ * @ptr (which the caller keeps valid) instead of a fresh allocation, so
+ * the region can shadow memory another program owns. Used by gem5's
+ * RiscvJitCPU for read-only memory.
+ *
+ * @mr: the #MemoryRegion to be initialized.
+ * @owner: the object that tracks the region's reference count
+ * @ops: callbacks for write access handling (must not be NULL).
+ * @opaque: passed to the write callbacks.
+ * @name: Region name, becomes part of RAMBlock name used in migration stream
+ *        must be unique within any device
+ * @size: size of the region.
+ * @ptr: memory to be mapped; must be page aligned.
+ */
+void memory_region_init_rom_device_ptr(MemoryRegion *mr,
+                                       Object *owner,
+                                       const MemoryRegionOps *ops,
+                                       void *opaque,
+                                       const char *name,
+                                       uint64_t size,
+                                       void *ptr);
+
 void memory_region_init_iommu(void *_iommu_mr,
                               size_t instance_size,
                               const char *mrtypename,

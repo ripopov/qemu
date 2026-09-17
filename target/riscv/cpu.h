@@ -240,6 +240,7 @@ struct CPUArchState {
 
     target_ulong badaddr;
     target_ulong bins;
+    uint32_t gem5_m5op; /* encoding behind EXCP_GEM5_M5OP (xgem5) */
 
     target_ulong guest_phys_fault_addr;
 

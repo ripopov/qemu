@@ -4475,6 +4475,21 @@ foreach target : target_dirs
     }]
 
   endforeach
+
+  # gem5's RiscvJitCPU drives the RISC-V system emulator through the C
+  # interface in include/gem5/qemu-jit.h. The library links the same
+  # objects as qemu-system-riscv64 without system/main.c, so configure
+  # with -Db_staticpic=true to make them position independent.
+  if target == 'riscv64-softmmu' and get_option('gem5_jit')
+    shared_library('gem5-qemu-jit', files('target/riscv/gem5_jit.c'),
+                   install: false,
+                   c_args: c_args,
+                   include_directories: target_inc,
+                   dependencies: arch_deps,
+                   objects: lib.extract_all_objects(recursive: true),
+                   link_depends: [block_syms, qemu_syms],
+                   link_args: link_args)
+  endif
 endforeach
 
 # Other build targets

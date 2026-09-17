@@ -1774,6 +1774,27 @@ bool memory_region_init_rom_device_nomigrate(MemoryRegion *mr,
     return true;
 }
 
+void memory_region_init_rom_device_ptr(MemoryRegion *mr,
+                                       Object *owner,
+                                       const MemoryRegionOps *ops,
+                                       void *opaque,
+                                       const char *name,
+                                       uint64_t size,
+                                       void *ptr)
+{
+    assert(ops);
+    memory_region_init(mr, owner, name, size);
+    mr->ops = ops;
+    mr->opaque = opaque;
+    mr->terminates = true;
+    mr->rom_device = true;
+    mr->destructor = memory_region_destructor_ram;
+
+    /* qemu_ram_alloc_from_ptr cannot fail with ptr != NULL.  */
+    assert(ptr != NULL);
+    mr->ram_block = qemu_ram_alloc_from_ptr(size, ptr, mr, &error_abort);
+}
+
 void memory_region_init_iommu(void *_iommu_mr,
                               size_t instance_size,
                               const char *mrtypename,

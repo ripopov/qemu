@@ -147,6 +147,8 @@ BOOL_FIELD(ext_xtheadmemidx)
 BOOL_FIELD(ext_xtheadmempair)
 BOOL_FIELD(ext_xtheadsync)
 BOOL_FIELD(ext_XVentanaCondOps)
+/* gem5 RiscvJitCPU co-simulation: m5 pseudo instructions, LR/SC via gem5 */
+BOOL_FIELD(ext_xgem5)
 
 BOOL_FIELD(mmu)
 BOOL_FIELD(pmp)

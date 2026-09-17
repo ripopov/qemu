@@ -729,6 +729,10 @@ ProbeSuccess:
     /* load bytes from guest memory */
     if (vl != 0) {
         env->vl = vl;
+        /* The first page may hold fewer active elements than probed. */
+        if (env->vstart + elems > env->vl) {
+            elems = env->vl - env->vstart;
+        }
     }
 
     if (env->vstart < env->vl) {

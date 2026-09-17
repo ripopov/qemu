@@ -42,7 +42,12 @@ static bool gen_lr(DisasContext *ctx, arg_atomic *a, MemOp mop)
     if (a->rl) {
         tcg_gen_mb(TCG_MO_ALL | TCG_BAR_STRL);
     }
-    tcg_gen_qemu_ld_tl(load_val, src1, ctx->mem_idx, mop);
+    if (ctx->cfg_ptr->ext_xgem5) {
+        /* gem5 owns reservations: the load and its bookkeeping happen there. */
+        gen_helper_gem5_lr(load_val, tcg_env, src1, tcg_constant_i32(mop));
+    } else {
+        tcg_gen_qemu_ld_tl(load_val, src1, ctx->mem_idx, mop);
+    }
     /*
      * TSO defines AMOs as acquire+release-RCsc, but does not define LR/SC as
      * AMOs.  Instead treat them like loads.
@@ -69,6 +74,21 @@ static bool gen_sc(DisasContext *ctx, arg_atomic *a, MemOp mop)
 
     decode_save_opc(ctx, 0);
     src1 = get_address(ctx, a->rs1, 0);
+    if (ctx->cfg_ptr->ext_xgem5) {
+        /*
+         * gem5's memory decides whether the reservation survived, exactly
+         * as for gem5's own CPU models; a failed SC still translates and
+         * may fault. The barriers implied by AQ/RL/TSO are preserved.
+         */
+        TCGBar bar_strl = (ctx->ztso || a->rl) ? TCG_BAR_STRL : 0;
+        dest = dest_gpr(ctx, a->rd);
+        src2 = get_gpr(ctx, a->rs2, EXT_NONE);
+        gen_helper_gem5_sc(dest, tcg_env, src1, src2, tcg_constant_i32(mop));
+        tcg_gen_mb(TCG_MO_ALL + a->aq * TCG_BAR_LDAQ + bar_strl);
+        gen_set_gpr(ctx, a->rd, dest);
+        tcg_gen_movi_tl(load_res, -1);
+        return true;
+    }
     tcg_gen_brcond_tl(TCG_COND_NE, load_res, src1, l1);
 
     /*

@@ -1289,3 +1289,8 @@ DEF_HELPER_4(vsm4r_vs, void, ptr, ptr, env, i32)
 #ifndef CONFIG_USER_ONLY
 DEF_HELPER_1(ssamoswap_disabled, void, env)
 #endif
+
+/* gem5 RiscvJitCPU co-simulation (xgem5) */
+DEF_HELPER_3(gem5_lr, tl, env, tl, i32)
+DEF_HELPER_4(gem5_sc, tl, env, tl, tl, i32)
+DEF_HELPER_2(gem5_m5op, noreturn, env, i32)
