@@ -2119,6 +2119,9 @@ static target_ulong promote_load_fault(target_ulong orig_cause)
     case RISCV_EXCP_LOAD_ACCESS_FAULT:
         return RISCV_EXCP_STORE_AMO_ACCESS_FAULT;
 
+    case RISCV_EXCP_LOAD_ADDR_MIS:
+        return RISCV_EXCP_STORE_AMO_ADDR_MIS;
+
     case RISCV_EXCP_LOAD_PAGE_FAULT:
         return RISCV_EXCP_STORE_PAGE_FAULT;
     }
