@@ -43,6 +43,8 @@ static TCGv_i64 cpu_fpr[32]; /* assume F and D extensions */
 static TCGv load_res;
 static TCGv load_val;
 
+bool riscv_gem5_jit_enabled;
+
 /*
  * If an operation is being performed on less than TARGET_LONG_BITS,
  * it may require the inputs to be sign- or zero-extended; which will
@@ -1278,6 +1280,13 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx)
                                                ctx->base.pc_next + 2));
         }
         ctx->opcode = opcode;
+
+        if (riscv_gem5_jit_enabled && (opcode & 0x7f) == 0x7b) {
+            tcg_gen_st_tl(tcg_constant_tl(opcode), tcg_env,
+                          offsetof(CPURISCVState, bins));
+            generate_exception(ctx, EXCP_GEM5_M5OP);
+            return;
+        }
 
         for (guint i = 0; i < ctx->decoders->len; ++i) {
             riscv_cpu_decode_fn func = g_ptr_array_index(ctx->decoders, i);

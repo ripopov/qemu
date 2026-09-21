@@ -850,6 +850,12 @@ static inline uint32_t vext_get_vlmax(uint32_t vlenb, uint32_t vsew,
 
 bool riscv_cpu_is_32bit(RISCVCPU *cpu);
 
+/* Enabled once by the embedded gem5 backend, before any translation.
+ * The dedicated executor exit leaves the opcode in env->bins and the
+ * PC at the pseudo instruction; EXCP_HLT remains reserved for WFI. */
+extern bool riscv_gem5_jit_enabled;
+#define EXCP_GEM5_M5OP (EXCP_INTERRUPT + 0x100)
+
 bool riscv_cpu_virt_mem_enabled(CPURISCVState *env);
 RISCVPmPmm riscv_pm_get_pmm(CPURISCVState *env);
 RISCVPmPmm riscv_pm_get_virt_pmm(CPURISCVState *env);
