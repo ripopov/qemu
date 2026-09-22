@@ -34,7 +34,7 @@ extern "C" {
 #endif
 
 /* Bump when any struct or function in this header changes incompatibly. */
-#define GEM5_QEMU_JIT_ABI_VERSION 2
+#define GEM5_QEMU_JIT_ABI_VERSION 3
 
 /*
  * One host-backed guest RAM range. Writable ranges require page-aligned
@@ -155,6 +155,37 @@ uint64_t gem5_qemu_jit_get_gpr(uint32_t hart, unsigned index);
 void gem5_qemu_jit_set_gpr(uint32_t hart, unsigned index, uint64_t value);
 uint64_t gem5_qemu_jit_get_reg(uint32_t hart, enum Gem5QemuJitReg reg);
 void gem5_qemu_jit_set_pc(uint32_t hart, uint64_t pc);
+
+/*
+ * Architectural state at a stopped instruction boundary, not a QEMU
+ * migration image. gem5 translates this into its normal register/checkpoint
+ * representation. Vector registers are packed, vlen / 8 bytes per register,
+ * in increasing architectural byte order. Unused bytes are zero.
+ *
+ * mip contains guest-owned pending bits, including the software SEIP bit;
+ * platform interrupt levels must be supplied separately after set_state.
+ * LR/SC reservations are deliberately lost on set_state (a legal SC failure).
+ * Derived PMP rules, TLBs and translated code are rebuilt or invalidated.
+ */
+#define GEM5_QEMU_JIT_MAX_VLEN 1024
+typedef struct Gem5QemuJitState {
+    uint64_t pc, gpr[32], fpr[32];
+    uint8_t vector[32 * GEM5_QEMU_JIT_MAX_VLEN / 8];
+    uint32_t vlen, pmp_regions, priv, halted;
+    uint64_t mstatus, misa, medeleg, mideleg, mie, mip;
+    uint64_t mtvec, mscratch, mepc, mcause, mtval;
+    uint64_t stvec, sscratch, sepc, scause, stval, satp;
+    uint64_t menvcfg, senvcfg, mcounteren, scounteren, mcountinhibit;
+    uint64_t fcsr, vstart, vl, vtype, vxrm, vxsat;
+    uint64_t pmpaddr[16];
+    uint8_t pmpcfg[16];
+    /* Architectural values, not simulator-relative counter offsets. */
+    uint64_t counter[32], hpmevent[32];
+} Gem5QemuJitState;
+
+/* Return -1 for invalid arguments; only call between run() calls. */
+int gem5_qemu_jit_get_state(uint32_t hart, Gem5QemuJitState *state);
+int gem5_qemu_jit_set_state(uint32_t hart, const Gem5QemuJitState *state);
 
 /*
  * Set the level of the platform interrupt lines (MEIP, MTIP, MSIP and the

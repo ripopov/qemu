@@ -33,6 +33,8 @@
 #include "cpu.h"
 #include "cpu-qom.h"
 #include "exec/icount.h"
+#include "exec/cputlb.h"
+#include "exec/tb-flush.h"
 #include "exec/target_page.h"
 #include "exec/translation-block.h"
 #include "hw/core/cpu.h"
@@ -348,6 +350,155 @@ void gem5_qemu_jit_set_pc(uint32_t hart_index, uint64_t pc)
     }
 }
 
+/* Fields without guest-write side effects or simulator-relative offsets. */
+#define JIT_STATE_FIELDS(X) \
+    X(pc) X(mstatus) X(medeleg) X(mideleg) X(mie) \
+    X(mtvec) X(mscratch) X(mepc) X(mcause) X(mtval) \
+    X(stvec) X(sscratch) X(sepc) X(scause) X(stval) X(satp) \
+    X(menvcfg) X(senvcfg) X(mcounteren) X(scounteren) \
+    X(vstart) X(vl) X(vxrm) X(vxsat)
+
+static uint64_t jit_state_csr(CPURISCVState *env, int csr, uint64_t value,
+                              bool write)
+{
+    target_ulong old = 0;
+    RISCVException result = riscv_csrrw_debug(env, csr, &old, value,
+                                             write ? -1 : 0);
+
+    g_assert(result == RISCV_EXCP_NONE);
+    return old;
+}
+
+static void jit_get_state(CPUState *cs, run_on_cpu_data data)
+{
+    RISCVCPU *cpu = RISCV_CPU(cs);
+    CPURISCVState *env = &cpu->env;
+    Gem5QemuJitState *s = data.host_ptr;
+
+    memset(s, 0, sizeof(*s));
+    s->vlen = cpu->cfg.vlenb * 8;
+    s->pmp_regions = cpu->cfg.pmp_regions;
+    s->priv = env->priv;
+    s->halted = cs->halted;
+#define GET_FIELD(field) s->field = env->field;
+    JIT_STATE_FIELDS(GET_FIELD)
+#undef GET_FIELD
+    memcpy(s->gpr, env->gpr, sizeof(s->gpr));
+    s->gpr[0] = 0;
+    memcpy(s->fpr, env->fpr, sizeof(s->fpr));
+    for (unsigned i = 0; i < 32 * cpu->cfg.vlenb / 8; i++) {
+        stq_le_p(s->vector + i * 8, env->vreg[i]);
+    }
+    s->misa = (UINT64_C(2) << 62) | env->misa_ext;
+    s->vtype = env->vtype | ((uint64_t)env->vill << 63);
+    s->fcsr = riscv_cpu_get_fflags(env) | (env->frm << 5);
+    s->mip = env->mip & ~(MIP_MEIP | MIP_MTIP | MIP_MSIP | MIP_SEIP);
+    s->mip |= env->software_seip ? MIP_SEIP : 0;
+    s->mcountinhibit = env->mcountinhibit;
+    for (unsigned i = 0; i < s->pmp_regions; i++) {
+        s->pmpaddr[i] = env->pmp_state.pmp[i].addr_reg;
+        s->pmpcfg[i] = env->pmp_state.pmp[i].cfg_reg;
+    }
+    for (unsigned i = 0; i < 32; i++) {
+        if (i == 1) {
+            continue; /* time belongs to gem5's CLINT */
+        }
+        s->counter[i] = jit_state_csr(env, CSR_MCYCLE + i, 0, false);
+        if (i >= 3) {
+            s->hpmevent[i] = env->mhpmevent_val[i];
+        }
+    }
+}
+
+int gem5_qemu_jit_get_state(uint32_t hart_index, Gem5QemuJitState *state)
+{
+    JitHart *hart = jit_hart(hart_index);
+
+    if (!hart || !state || jit.batch_hart) {
+        return -1;
+    }
+    run_on_cpu(hart->cs, jit_get_state, RUN_ON_CPU_HOST_PTR(state));
+    return 0;
+}
+
+static void jit_set_state(CPUState *cs, run_on_cpu_data data)
+{
+    RISCVCPU *cpu = RISCV_CPU(cs);
+    CPURISCVState *env = &cpu->env;
+    const Gem5QemuJitState *s = data.host_ptr;
+
+#define SET_FIELD(field) env->field = s->field;
+    JIT_STATE_FIELDS(SET_FIELD)
+#undef SET_FIELD
+    memcpy(env->gpr, s->gpr, sizeof(s->gpr));
+    env->gpr[0] = 0;
+    memcpy(env->fpr, s->fpr, sizeof(s->fpr));
+    memset(env->vreg, 0, sizeof(env->vreg));
+    for (unsigned i = 0; i < 32 * cpu->cfg.vlenb / 8; i++) {
+        env->vreg[i] = ldq_le_p(s->vector + i * 8);
+    }
+    env->misa_ext = s->misa;
+    env->vtype = s->vtype & ~(UINT64_C(1) << 63);
+    env->vill = s->vtype >> 63;
+    env->frm = (s->fcsr >> 5) & 7;
+    riscv_cpu_set_fflags(env, s->fcsr & 31);
+    riscv_cpu_set_mode(env, s->priv, false);
+    for (unsigned i = 0; i < s->pmp_regions; i++) {
+        env->pmp_state.pmp[i].addr_reg = s->pmpaddr[i];
+        env->pmp_state.pmp[i].cfg_reg = s->pmpcfg[i];
+    }
+    for (unsigned i = 0; i < s->pmp_regions; i++) {
+        pmp_update_rule_addr(env, i);
+    }
+    pmp_update_rule_nums(env);
+
+    /* Rebase counters onto this QEMU instance's clock/instruction counts. */
+    if (cpu->pmu_timer) {
+        timer_del(cpu->pmu_timer);
+    }
+    env->mcountinhibit = s->mcountinhibit;
+    for (unsigned i = 0; i < 32; i++) {
+        if (i == 1) {
+            continue;
+        }
+        if (i >= 3) {
+            jit_state_csr(env, CSR_MCOUNTINHIBIT + i, s->hpmevent[i], true);
+        }
+        jit_state_csr(env, CSR_MCYCLE + i, s->counter[i], true);
+    }
+    env->load_res = -1;
+    env->external_seip = false;
+    env->software_seip = !!(s->mip & MIP_SEIP);
+    cs->exception_index = -1;
+    cs->halted = s->halted;
+    riscv_cpu_update_mip(env, UINT64_MAX, s->mip);
+    tlb_flush(cs);
+    /* The adapter uses one TCG thread; all other harts are stopped. */
+    tb_flush__exclusive_or_serial();
+}
+
+int gem5_qemu_jit_set_state(uint32_t hart_index,
+                            const Gem5QemuJitState *state)
+{
+    JitHart *hart = jit_hart(hart_index);
+
+    if (!hart || !state || jit.batch_hart ||
+        state->vlen != hart->cpu->cfg.vlenb * 8 ||
+        state->pmp_regions != hart->cpu->cfg.pmp_regions ||
+        (state->priv != PRV_M && state->priv != PRV_S &&
+         state->priv != PRV_U) || state->halted > 1 ||
+        state->misa >> 62 != 2 ||
+        ((uint32_t)state->misa & ~hart->cpu->env.misa_ext_mask)) {
+        return -1;
+    }
+    hart->step_over = false;
+    run_on_cpu(hart->cs, jit_set_state,
+               RUN_ON_CPU_HOST_PTR((void *)state));
+    return 0;
+}
+
+#undef JIT_STATE_FIELDS
+
 void gem5_qemu_jit_set_interrupts(uint32_t hart_index, uint64_t pending)
 {
     JitHart *hart = jit_hart(hart_index);
@@ -607,6 +758,11 @@ int gem5_qemu_jit_init(const Gem5QemuJitConfig *config, char *error,
     if (!config->hart_count || !config->isa || !config->ram_count ||
         !config->ram || !jit_callbacks_complete(&config->callbacks)) {
         jit_error(error, error_size, "incomplete backend configuration");
+        return -1;
+    }
+    if (config->pmp_regions > 16 || config->vlen > GEM5_QEMU_JIT_MAX_VLEN) {
+        jit_error(error, error_size, "state interface supports at most "
+                  "16 PMP entries and VLEN %u", GEM5_QEMU_JIT_MAX_VLEN);
         return -1;
     }
     if (g_ascii_strcasecmp(config->isa, jit_contract_isa) &&
